@@ -1,0 +1,23 @@
+{
+  "name": "@zk-stables/evm",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "node": "hardhat node",
+    "deploy:anvil": "hardhat run --network anvil scripts/deploy-anvil.js",
+    "test": "hardhat test"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.9",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^22.19.3",
+    "ethers": "^6.15.0",
+    "hardhat": "^2.22.19",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "keccak256": "^1.0.6",
+    "merkletreejs": "^0.6.0"
+  }
+}

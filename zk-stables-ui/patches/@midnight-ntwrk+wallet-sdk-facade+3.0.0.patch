@@ -1,0 +1,19 @@
+diff --git a/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js b/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js
+index 89457c5..fa9d00c 100644
+--- a/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js
++++ b/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js
+@@ -243,9 +243,13 @@ export class WalletFacade {
+             : undefined;
+         // Step 2: Unbound unshielded tx are balanced in place, use it as base tx if present
+         const baseTx = balancedUnshieldedTx ?? tx;
++        // Merge shielded balancing into the base before dust fee work. Passing two txs to
++        // dust.balanceTransactions makes dryRunFee merge them; overlapping segment_ids then throw.
++        // (balanceUnprovenTransaction already merges before dust; unbound must match that.)
++        const mergedForDust = this.mergeUnprovenTransactions(baseTx, shieldedBalancingTx);
+         // Step 3: Conditionally add dust/fee balancing
+         const feeBalancingTransaction = shouldBalanceDust
+-            ? await this.dust.balanceTransactions(dustSecretKey, shieldedBalancingTx ? [baseTx, shieldedBalancingTx] : [baseTx], ttl)
++            ? await this.dust.balanceTransactions(dustSecretKey, [mergedForDust], ttl)
+             : undefined;
+         // Step 4: Create the final balancing transaction
+         const balancingTransaction = this.mergeUnprovenTransactions(shieldedBalancingTx, feeBalancingTransaction);

@@ -1,0 +1,6 @@
+node_modules
+dist
+public/keys/*
+public/zkir/*
+!public/keys/.gitkeep
+!public/zkir/.gitkeep

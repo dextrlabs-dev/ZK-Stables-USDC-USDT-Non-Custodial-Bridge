@@ -1,0 +1,30 @@
+diff --git a/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/transaction.js b/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/transaction.js
+index baf5ba0..c849c61 100644
+--- a/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/transaction.js
++++ b/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/transaction.js
+@@ -14,6 +14,14 @@
+  */
+ import { Array as Arr, DateTime, Duration, HashSet, Option, Order, pipe } from 'effect';
+ import * as ledger from '@midnight-ntwrk/ledger-v8';
++/** Native `Map#values()` iterators have no `toArray`; Effect collections do. */
++const intentCollectionToArray = (intents) => {
++    if (!intents) {
++        return [];
++    }
++    const v = intents.values();
++    return typeof v.toArray === 'function' ? v.toArray() : [...v];
++};
+ export const finalizedTransactionTrait = {
+     areAllTxIdsIncluded(tx, txIds) {
+         const txIdsSet = HashSet.fromIterable(tx.identifiers());
+@@ -28,8 +36,8 @@ export const finalizedTransactionTrait = {
+     },
+     hasTTLExpired(tx, creationTime, now) {
+         const defaultShieldedGracePeriod = ledger.LedgerParameters.initialParameters().dust.dustGracePeriodSeconds;
+-        const intentTTLs = pipe(tx.intents?.values().toArray() ?? [], Arr.map((i) => i.ttl), Arr.filterMap(DateTime.make));
+-        const hasDustPayments = pipe(tx.intents?.values().toArray() ?? [], Arr.flatMap((i) => i.dustActions?.spends ?? []), Arr.isNonEmptyArray);
++        const intentTTLs = pipe(intentCollectionToArray(tx.intents), Arr.map((i) => i.ttl), Arr.filterMap(DateTime.make));
++        const hasDustPayments = pipe(intentCollectionToArray(tx.intents), Arr.flatMap((i) => i.dustActions?.spends ?? []), Arr.isNonEmptyArray);
+         const hasShieldedOffers = tx.guaranteedOffer != null || (tx.fallibleOffer?.size ?? 0) == 0;
+         const maybeShieldedTTL = hasDustPayments || hasShieldedOffers
+             ? pipe(creationTime, DateTime.addDuration(Duration.seconds(Number(defaultShieldedGracePeriod))), Arr.of)

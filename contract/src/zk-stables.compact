@@ -1,0 +1,167 @@
+pragma language_version >= 0.22;
+
+import CompactStandardLibrary;
+
+export { Maybe }
+
+/// USDC vs USDT position on Midnight (encoded identically off-chain per DEPOSIT_COMMITMENT_ENCODING.md).
+enum AssetKind {
+  USDC,
+  USDT
+}
+
+enum BridgeState {
+  Active,
+  ExitPending,
+  Burned
+}
+
+/// Binding commitment to source lock (see docs/DEPOSIT_COMMITMENT_ENCODING.md).
+export ledger depositCommitment: Bytes<32>;
+
+export ledger assetKind: AssetKind;
+
+export ledger sourceChainId: Uint<32>;
+
+export ledger amount: Uint<64>;
+
+/// Holder authority; derived from holder secret + round (see publicKeyHolder).
+export ledger holder: Bytes<32>;
+
+/// Operator that may finalize burn after unlock path is proven off-chain.
+export ledger bridgeOperator: Bytes<32>;
+
+export ledger state: BridgeState;
+
+/// Mixed into holder public key derivation (Midnight lock-style anonymity).
+export ledger round: Counter;
+
+/// Set when user calls initiateBurn (destination for unlock path).
+export ledger destChainId: Uint<32>;
+
+/// H(recipient) or protocol-specific commitment; zero means unset.
+export ledger recipientCommitment: Bytes<32>;
+
+/// One-time unshielded wrap mint to this contract (see token-transfers.mdx pattern).
+export ledger mintedUnshielded: Boolean;
+
+/// Holder has sent wrapped unshielded out during exit (required before operator finalizeBurn).
+export ledger unshieldedReleased: Boolean;
+
+constructor(
+  dep: Bytes<32>,
+  kind: AssetKind,
+  srcChain: Uint<32>,
+  amt: Uint<64>,
+  ownerPk: Bytes<32>
+) {
+  const op = operatorSecretKey();
+  assert(op.is_some, "Operator Secret Key not set");
+  bridgeOperator = disclose(publicKeyOperator(op.value));
+  depositCommitment = disclose(dep);
+  assetKind = disclose(kind);
+  sourceChainId = disclose(srcChain);
+  amount = disclose(amt);
+  holder = disclose(ownerPk);
+  state = BridgeState.Active;
+  destChainId = disclose(0);
+  recipientCommitment = disclose(pad(32, ""));
+  mintedUnshielded = false;
+  unshieldedReleased = false;
+}
+
+/// Domain separation per asset kind + ticket; matches send path via `tokenType(domain, kernel.self())`.
+circuit wrappedTokenDomain(): Bytes<32> {
+  if (assetKind == AssetKind.USDC) {
+    return persistentHash<Vector<2, Bytes<32>>>(
+      [pad(32, "zkstables:wrap:USDC:v1"), depositCommitment]);
+  } else {
+    return persistentHash<Vector<2, Bytes<32>>>(
+      [pad(32, "zkstables:wrap:USDT:v1"), depositCommitment]);
+  }
+}
+
+circuit publicKeyOperator(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>(
+    [pad(32, "zkstables:operator:pk:"), sk]);
+}
+
+circuit publicKeyHolder(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>(
+    [pad(32, "zkstables:holder:pk:"), round as Bytes<32>, sk]);
+}
+
+witness operatorSecretKey(): Maybe<Bytes<32>>;
+
+witness holderSecretKey(): Maybe<Bytes<32>>;
+
+/// Proves caller knows holder secret; allowed while not Burned.
+export circuit proveHolder(): Boolean {
+  const key = holderSecretKey();
+  assert(key.is_some, "Holder Secret Key not set");
+  assert(state != BridgeState.Burned, "Already burned");
+  const pk = disclose(publicKeyHolder(key.value));
+  assert(pk == holder, "Not holder");
+  return true;
+}
+
+/// Operator mints wrapped unshielded to this contract once (midnight-docs token-transfers pattern).
+export circuit mintWrappedUnshielded(): Bytes<32> {
+  assert(state == BridgeState.Active, "Not active");
+  assert(mintedUnshielded == false, "Already minted unshielded");
+  const op = operatorSecretKey();
+  assert(op.is_some, "Operator Secret Key not set");
+  const opPk = disclose(publicKeyOperator(op.value));
+  assert(opPk == bridgeOperator, "Not operator");
+  const domain = wrappedTokenDomain();
+  const color = mintUnshieldedToken(
+    disclose(domain),
+    disclose(amount),
+    left<ContractAddress, UserAddress>(kernel.self())
+  );
+  mintedUnshielded = true;
+  return disclose(color);
+}
+
+/// Holder sends ledger `amount` of wrapped unshielded to `user_addr` while exit is pending.
+export circuit sendWrappedUnshieldedToUser(user_addr: UserAddress): [] {
+  assert(state == BridgeState.ExitPending, "Not exit pending");
+  assert(mintedUnshielded == true, "Not minted");
+  assert(unshieldedReleased == false, "Already released");
+  const key = holderSecretKey();
+  assert(key.is_some, "Holder Secret Key not set");
+  const pk = disclose(publicKeyHolder(key.value));
+  assert(pk == holder, "Not holder");
+  const domain = wrappedTokenDomain();
+  const color = tokenType(disclose(domain), kernel.self());
+  sendUnshielded(
+    color,
+    disclose(amount) as Uint<128>,
+    right<ContractAddress, UserAddress>(disclose(user_addr))
+  );
+  unshieldedReleased = true;
+}
+
+/// User marks intent to exit; records destination chain + recipient commitment for unlock flow.
+export circuit initiateBurn(destChain: Uint<32>, recipientComm: Bytes<32>): [] {
+  assert(state == BridgeState.Active, "Not active");
+  const key = holderSecretKey();
+  assert(key.is_some, "Holder Secret Key not set");
+  const pk = disclose(publicKeyHolder(key.value));
+  assert(pk == holder, "Not holder");
+  destChainId = disclose(destChain);
+  recipientCommitment = disclose(recipientComm);
+  state = BridgeState.ExitPending;
+}
+
+/// Operator confirms burn consumed on Midnight after BURN_UNLOCK proof pipeline completes off-chain.
+export circuit finalizeBurn(): [] {
+  const op = operatorSecretKey();
+  assert(op.is_some, "Operator Secret Key not set");
+  const opPk = disclose(publicKeyOperator(op.value));
+  assert(opPk == bridgeOperator, "Not operator");
+  assert(state == BridgeState.ExitPending, "Not exit pending");
+  assert((mintedUnshielded == false) || (unshieldedReleased == true), "Release unshielded before finalize");
+  state = BridgeState.Burned;
+  round.increment(1);
+}
