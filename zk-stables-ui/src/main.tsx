@@ -7,7 +7,7 @@ import './globals';
 const root = document.getElementById('root');
 if (root) {
   root.innerHTML =
-    '<p style="font-family:system-ui,sans-serif;padding:2rem;margin:0;color:#ccc;background:#121212">Loading ZK-Stables (Midnight SDK)…</p>';
+    '<p style="font-family:system-ui,sans-serif;padding:2rem;margin:0;color:#ccc;background:#121212">Loading app shell…</p>';
 }
 
 import('./bootstrap.js')

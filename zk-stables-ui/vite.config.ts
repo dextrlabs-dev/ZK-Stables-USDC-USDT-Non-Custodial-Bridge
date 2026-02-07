@@ -42,17 +42,45 @@ export default defineConfig(({ mode }) => ({
     esbuildOptions: {
       define: { global: 'globalThis' },
     },
-    // Let Vite pre-bundle WASM deps once; excluding caused repeated slow transforms.
-    include: ['buffer', 'react', 'react-dom', 'react/jsx-runtime'],
+    // Pre-bundle the shell so the first dev request is fast; Midnight/WASM still lazy via MainApp.
+    include: [
+      'buffer',
+      'react',
+      'react-dom',
+      'react/jsx-runtime',
+      '@emotion/react',
+      '@emotion/styled',
+      '@mui/material',
+      '@tanstack/react-query',
+      'wagmi',
+      'viem',
+    ],
   },
   build: {
     commonjsOptions: { transformMixedEsModules: true },
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('@midnight-ntwrk') || id.includes('ledger-v8')) {
+            return 'midnight';
+          }
+          if (id.includes('@mui') || id.includes('@emotion')) {
+            return 'mui';
+          }
+          if (id.includes('viem') || id.includes('wagmi') || id.includes('@tanstack')) {
+            return 'evm-wallet';
+          }
+          return 'vendor';
+        },
+      },
+    },
   },
   server: {
     fs: { allow: ['..'] },
-    // Do not warm the entire dependency graph at startup (Midnight + WASM is huge).
+    // Warm shell only; MainApp triggers a second transform when the browser requests it.
     warmup: {
-      clientFiles: ['./index.html', './src/main.tsx', './src/globals.ts'],
+      clientFiles: ['./index.html', './src/main.tsx', './src/globals.ts', './src/bootstrap.tsx'],
     },
   },
 }));
