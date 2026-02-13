@@ -414,8 +414,15 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
         };
 
         const midnightProvider = {
-          submitTx(tx: ledgerV8.FinalizedTransaction) {
-            return ctx.wallet.submitTransaction(tx) as any;
+          /** Match Lace: return identifiers()[0] so indexer `watchForTxData` resolves (multi-segment txs: last id can differ). */
+          async submitTx(tx: ledgerV8.FinalizedTransaction): Promise<string> {
+            await ctx.wallet.submitTransaction(tx);
+            const ids = tx.identifiers();
+            const head = ids[0];
+            if (head === undefined) {
+              throw new Error('Submitted transaction has no identifiers');
+            }
+            return head;
           },
         };
 
@@ -720,31 +727,42 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
 
   const proveHolder = useCallback(async () => {
     const d = requireDeployed();
-    setFlowMessage('proveHolder: proving…');
-    const r = await d.callTx.proveHolder();
-    appendTxLog('proveHolder', r.public);
-    setFlowMessage(undefined);
-    await refreshLedger();
+    setFlowMessage(
+      'proveHolder: prove → balance → submit → waiting for indexer (multi-step; do not refresh)…',
+    );
+    try {
+      const r = await d.callTx.proveHolder();
+      appendTxLog('proveHolder', r.public);
+      await refreshLedger();
+    } finally {
+      setFlowMessage(undefined);
+    }
   }, [appendTxLog, refreshLedger, requireDeployed]);
 
   const mintWrappedUnshielded = useCallback(async () => {
     const d = requireDeployed();
-    setFlowMessage('mintWrappedUnshielded: proving…');
-    const r = await d.callTx.mintWrappedUnshielded();
-    appendTxLog('mintWrappedUnshielded', r.public);
-    setFlowMessage(undefined);
-    await refreshLedger();
+    setFlowMessage('mintWrappedUnshielded: prove → submit → waiting for indexer…');
+    try {
+      const r = await d.callTx.mintWrappedUnshielded();
+      appendTxLog('mintWrappedUnshielded', r.public);
+      await refreshLedger();
+    } finally {
+      setFlowMessage(undefined);
+    }
   }, [appendTxLog, refreshLedger, requireDeployed]);
 
   const initiateBurn = useCallback(async () => {
     const d = requireDeployed();
     const dest = BigInt(burnDestChain || '0');
     const comm = hexToBytes32(recipientCommHex);
-    setFlowMessage('initiateBurn: proving…');
-    const r = await d.callTx.initiateBurn(dest, comm);
-    appendTxLog('initiateBurn', r.public);
-    setFlowMessage(undefined);
-    await refreshLedger();
+    setFlowMessage('initiateBurn: prove → submit → waiting for indexer…');
+    try {
+      const r = await d.callTx.initiateBurn(dest, comm);
+      appendTxLog('initiateBurn', r.public);
+      await refreshLedger();
+    } finally {
+      setFlowMessage(undefined);
+    }
   }, [appendTxLog, burnDestChain, recipientCommHex, refreshLedger, requireDeployed]);
 
   const sendWrappedUnshieldedToUser = useCallback(async () => {
@@ -760,20 +778,26 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       /* use NETWORK_ID */
     }
     const userAddr = userAddressStructFromInput(sendToAddressInput, nid);
-    setFlowMessage('sendWrappedUnshieldedToUser: proving…');
-    const r = await d.callTx.sendWrappedUnshieldedToUser(userAddr);
-    appendTxLog('sendWrappedUnshieldedToUser', r.public);
-    setFlowMessage(undefined);
-    await refreshLedger();
+    setFlowMessage('sendWrappedUnshieldedToUser: prove → submit → waiting for indexer…');
+    try {
+      const r = await d.callTx.sendWrappedUnshieldedToUser(userAddr);
+      appendTxLog('sendWrappedUnshieldedToUser', r.public);
+      await refreshLedger();
+    } finally {
+      setFlowMessage(undefined);
+    }
   }, [appendTxLog, refreshLedger, requireDeployed, sendToAddressInput]);
 
   const finalizeBurn = useCallback(async () => {
     const d = requireDeployed();
-    setFlowMessage('finalizeBurn: proving…');
-    const r = await d.callTx.finalizeBurn();
-    appendTxLog('finalizeBurn', r.public);
-    setFlowMessage(undefined);
-    await refreshLedger();
+    setFlowMessage('finalizeBurn: prove → submit → waiting for indexer…');
+    try {
+      const r = await d.callTx.finalizeBurn();
+      appendTxLog('finalizeBurn', r.public);
+      await refreshLedger();
+    } finally {
+      setFlowMessage(undefined);
+    }
   }, [appendTxLog, refreshLedger, requireDeployed]);
 
   const canProveHolder = ledger !== null && ledger.state !== 2;
