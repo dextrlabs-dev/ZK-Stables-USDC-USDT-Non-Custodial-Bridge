@@ -80,6 +80,36 @@ event_commitment = H(
 )
 ```
 
+**EVM (burn on wrapped token — mUSDC / mUSDT test path)**
+
+Emitted by `ZkStablesWrappedToken.burn(amount, recipientOnSource, nonce, burnCommitment)`. Indexed topics: `from`, `recipientOnSource`. Log data: `abi.encode(amount, nonce, burnCommitment)`.
+
+```
+event_commitment = H(
+  "ZKStables:EVM:Burn:v1" ||
+  uint32_be(evm_chain_id) ||
+  address_20_bytes(wrapped_token) ||
+  address_20_bytes(from) ||
+  address_20_bytes(recipient_on_source) ||
+  uint256_be(amount_raw) ||
+  bytes32(burn_nonce) ||
+  bytes32(burn_commitment)
+)
+```
+
+**Cardano (synthetic burn anchor for tests / manual intents)**
+
+When proving a Cardano-sourced burn without a finalized on-chain burn script, the relayer accepts a stub anchor `(txHash, outputIndex)` plus the same `burn_commitment` byte string:
+
+```
+event_commitment = H(
+  "ZKStables:Cardano:Burn:v1" ||
+  bytes32(txid) ||
+  uint32_be(output_index) ||
+  bytes32(burn_commitment)
+)
+```
+
 ## Integration with Compact
 
 - [`zk-stables.compact`](../src/zk-stables.compact) stores **`depositCommitment`** as `Bytes<32>` at deploy time; the **DApp must pass** the same bytes produced by this spec after off-chain verification.

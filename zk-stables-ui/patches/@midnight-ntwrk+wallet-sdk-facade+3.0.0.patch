@@ -1,14 +1,27 @@
 diff --git a/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js b/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js
-index 89457c5..fa9d00c 100644
+index 89457c5..528eaef 100644
 --- a/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js
 +++ b/node_modules/@midnight-ntwrk/wallet-sdk-facade/dist/index.js
-@@ -243,9 +243,13 @@ export class WalletFacade {
+@@ -233,19 +233,20 @@ export class WalletFacade {
+         const { shieldedSecretKeys, dustSecretKey } = secretKeys;
+         const { ttl, tokenKindsToBalance = 'all' } = options;
+         const { shouldBalanceDust, shouldBalanceShielded, shouldBalanceUnshielded } = TokenKindsToBalance.toFlags(tokenKindsToBalance);
+-        // Step 1: Run unshielded and shielded balancing
+-        const shieldedBalancingTx = shouldBalanceShielded
+-            ? await this.shielded.balanceTransaction(shieldedSecretKeys, tx)
+-            : undefined;
+-        // For unbound transactions, unshielded balancing happens in place not with a balancing transaction
++        // Unshielded first so shielded balances the same tx the user will bind (avoids overlapping
++        // segment_ids when merging shielded fragment with base for dust dryRunFee).
+         const balancedUnshieldedTx = shouldBalanceUnshielded
+             ? await this.unshielded.balanceUnboundTransaction(tx)
              : undefined;
-         // Step 2: Unbound unshielded tx are balanced in place, use it as base tx if present
+-        // Step 2: Unbound unshielded tx are balanced in place, use it as base tx if present
          const baseTx = balancedUnshieldedTx ?? tx;
-+        // Merge shielded balancing into the base before dust fee work. Passing two txs to
-+        // dust.balanceTransactions makes dryRunFee merge them; overlapping segment_ids then throw.
-+        // (balanceUnprovenTransaction already merges before dust; unbound must match that.)
++        const shieldedBalancingTx = shouldBalanceShielded
++            ? await this.shielded.balanceTransaction(shieldedSecretKeys, baseTx)
++            : undefined;
++        // Single merged tx for dust (was: two txs → dryRunFee segment collision).
 +        const mergedForDust = this.mergeUnprovenTransactions(baseTx, shieldedBalancingTx);
          // Step 3: Conditionally add dust/fee balancing
          const feeBalancingTransaction = shouldBalanceDust

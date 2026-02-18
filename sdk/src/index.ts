@@ -20,6 +20,8 @@ export type BurnIntent = {
   assetKind: number;
   amount: string;
   recipient: string;
+  /** 32-byte hex (64 chars) for Midnight `depositCommitment` binding. */
+  burnCommitmentHex: string;
 };
 
 export type RelayerPhase =
@@ -38,6 +40,7 @@ export type RelayerJob = {
   lockRef: string;
   intent: LockIntent | BurnIntent;
   destinationHint?: string;
+  depositCommitmentHex?: string;
   proofBundle?: { algorithm: string; digest: string; publicInputsHex: string };
   error?: string;
 };

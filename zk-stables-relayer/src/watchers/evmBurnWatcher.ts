@@ -2,10 +2,11 @@ import type { Logger } from 'pino';
 import { createPublicClient, http, parseAbiItem } from 'viem';
 import { foundry } from 'viem/chains';
 import type { Address, Hex } from 'viem';
+import { mergeRelayerBridgeIntoConnected } from '../config/bridgeRecipients.js';
 import { enqueueLockIntent } from '../pipeline/runJob.js';
 
 const burnedEvent = parseAbiItem(
-  'event Burned(address indexed from,address indexed recipientOnSource,uint256 amount,bytes32 nonce)',
+  'event Burned(address indexed from,address indexed recipientOnSource,uint256 amount,bytes32 nonce,bytes32 burnCommitment)',
 );
 
 export async function runEvmBurnWatcher(logger: Logger): Promise<void> {
@@ -19,6 +20,8 @@ export async function runEvmBurnWatcher(logger: Logger): Promise<void> {
   const pollMs = Number(process.env.RELAYER_EVM_POLL_MS ?? 2000);
   const confirmations = BigInt(process.env.RELAYER_EVM_CONFIRMATIONS ?? 0);
   let cursor = BigInt(process.env.RELAYER_EVM_BURN_FROM_BLOCK ?? 0);
+  const burnAsset = (process.env.RELAYER_EVM_BURN_ASSET ?? 'USDC').toUpperCase();
+  const isUsdt = burnAsset === 'USDT';
 
   const client = createPublicClient({ chain: foundry, transport: http(rpcUrl) });
 
@@ -34,14 +37,18 @@ export async function runEvmBurnWatcher(logger: Logger): Promise<void> {
           toBlock: safeTo,
         });
         for (const l of logs) {
-          const job = await enqueueLockIntent(logger, {
+          const burnC = l.args.burnCommitment as Hex;
+          const burnCommitmentHex = burnC.replace(/^0x/i, '');
+          if (burnCommitmentHex.length !== 64) continue;
+          const intent = {
             operation: 'BURN' as const,
-            sourceChain: 'evm',
+            sourceChain: 'evm' as const,
             destinationChain: 'evm',
-            asset: 'USDC',
-            assetKind: 0,
+            asset: isUsdt ? ('USDT' as const) : ('USDC' as const),
+            assetKind: isUsdt ? 1 : 0,
             amount: (l.args.amount as bigint).toString(),
             recipient: l.args.recipientOnSource as Address,
+            burnCommitmentHex,
             source: {
               evm: {
                 txHash: l.transactionHash as Hex,
@@ -49,10 +56,13 @@ export async function runEvmBurnWatcher(logger: Logger): Promise<void> {
                 blockNumber: (l.blockNumber ?? 0n).toString(),
                 wrappedTokenAddress: wrapped,
                 nonce: l.args.nonce as Hex,
+                fromAddress: l.args.from as Address,
               },
             },
-            note: 'ingested from EVM Burned event',
-          });
+            note: 'ingested from EVM Burned event (mUSDC/mUSDT test wrapped token)',
+          };
+          mergeRelayerBridgeIntoConnected(intent);
+          const job = await enqueueLockIntent(logger, intent);
           if (!job) continue;
         }
         cursor = safeTo + 1n;

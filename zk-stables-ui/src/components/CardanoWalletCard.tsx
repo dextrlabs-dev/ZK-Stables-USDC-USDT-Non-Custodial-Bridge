@@ -34,15 +34,19 @@ export const CardanoWalletCard: React.FC = () => {
     <Card id="panel-cardano" variant="outlined">
       <CardContent>
         <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 0.5 }}>
-          <Typography variant="h6">Cardano (CIP-30)</Typography>
-          {isDemoCardano && <Chip size="small" label="UI demo" color="secondary" variant="outlined" />}
+          <Typography variant="h6" component="h3">
+            Cardano (CIP-30)
+          </Typography>
+          {isDemoCardano && <Chip size="small" label="Synthetic demo" color="secondary" variant="outlined" />}
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          SRS: native lock and unlock on Cardano. This connects a CIP-30 browser wallet only; no Plutus transactions yet.
+          Connect a Cardano browser wallet (CIP-30) for address discovery. On-chain Plutus lock/unlock flows are not wired in
+          this demo yet.
         </Typography>
         {keys.length === 0 && (
           <Alert severity="info" sx={{ mb: 2 }}>
-            No window.cardano wallet detected. Install a CIP-30 extension and refresh.
+            No Cardano extension found (<code>window.cardano</code>). Install a CIP-30 wallet (e.g. Eternl, Nami), enable it
+            for this site, then refresh.
           </Alert>
         )}
         {err && (
@@ -53,18 +57,18 @@ export const CardanoWalletCard: React.FC = () => {
         {cardanoWalletKey && cardanoDisplay && (
           <Typography variant="body2" sx={{ mb: 1 }}>
             <strong>{cardanoWalletKey}</strong>
-            {' · networkId '}
+            {' · Network id '}
             {cardanoNetworkId ?? '—'}
             {cardanoBech32Preview && (
               <>
                 <br />
-                <Typography component="span" variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                <Typography component="span" variant="dataMono" sx={{ wordBreak: 'break-all' }}>
                   {cardanoBech32Preview}
                 </Typography>
               </>
             )}
             <br />
-            <Typography component="span" variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+            <Typography component="span" variant="dataMono" sx={{ wordBreak: 'break-all' }}>
               {cardanoUsedAddressesHex[0] ?? cardanoDisplay}
             </Typography>
           </Typography>
@@ -73,7 +77,7 @@ export const CardanoWalletCard: React.FC = () => {
           <TextField
             select
             size="small"
-            label="Wallet"
+            label="Extension"
             value={selected}
             onChange={(e) => setSelected(e.target.value)}
             sx={{ minWidth: 160 }}
@@ -102,7 +106,7 @@ export const CardanoWalletCard: React.FC = () => {
             Disconnect
           </Button>
           <Button variant="text" size="small" disabled={!!cardanoWalletKey} onClick={applyDemoCardano}>
-            Load UI demo (no extension)
+            Use synthetic demo (no extension)
           </Button>
         </Stack>
       </CardContent>

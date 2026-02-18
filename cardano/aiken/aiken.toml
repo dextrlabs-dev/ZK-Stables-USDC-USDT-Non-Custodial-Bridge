@@ -1,0 +1,10 @@
+name = "zkstables/bridge_cardano"
+version = "0.1.0"
+plutusVersion = "v3"
+licences = ["Apache-2.0"]
+description = "ZK-Stables Cardano LockPool / UnlockPool (Phase 3) — Aiken Plutus v3"
+
+[[dependencies]]
+name = "aiken-lang/stdlib"
+version = "v2"
+source = "github"

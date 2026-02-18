@@ -27,11 +27,34 @@ export type LockIntent = {
       token?: `0x${string}`;
       nonce?: `0x${string}`;
     };
+    /** Cardano lock UTxO anchor (see contract/docs/DEPOSIT_COMMITMENT_ENCODING.md). */
+    cardano?: {
+      txHash: string;
+      outputIndex: number;
+      blockHeight?: string;
+      scriptHash?: string;
+      /** Policy hex (28-byte policy id); omit or empty for ada-only locks per tooling. */
+      policyIdHex?: string;
+      /** Hex-encoded asset name bytes. */
+      assetNameHex?: string;
+      /** Decimal string of UInt64 lock nonce from on-chain datum (if known). */
+      lockNonce?: string;
+    };
   };
   connected?: {
     evm?: string;
     cardano?: string;
+    /** Shielded (Zswap) bech32 when Lace/dev wallet exposes it. */
     midnight?: string;
+    /** Unshielded (tNight) `mn_addr_*` when dev-seed or tooling exposes it — valid Midnight recipient, not EVM/Cardano. */
+    midnightUnshielded?: string;
+    /** Relayer env `RELAYER_BRIDGE_*` — operator EVM / Cardano payout wallets for bridge handoff. */
+    relayerBridge?: {
+      evmRecipient?: string;
+      cardanoRecipient?: string;
+      /** Default Midnight destination for Cardano lock watcher when stub unset; optional echo on intents. */
+      midnightRecipient?: string;
+    };
   };
   note?: string;
 };
@@ -48,6 +71,11 @@ export type BurnIntent = {
    * (Matches SRS burn→unlock flow semantics.)
    */
   recipient: string;
+  /**
+   * 32-byte hex (64 chars, optional `0x`) binding the burn to a Midnight deposit / ticket (`BURN_UNLOCK` preimage).
+   * Emitted in `ZkStablesWrappedToken.Burned` and required for `depositCommitment` computation.
+   */
+  burnCommitmentHex: string;
   source?: {
     evm?: {
       txHash: `0x${string}`;
@@ -55,8 +83,21 @@ export type BurnIntent = {
       blockNumber?: string;
       wrappedTokenAddress?: `0x${string}`;
       nonce?: `0x${string}`;
+      /** Burner address (`Burned` topic1) — required for EVM `event_commitment`. */
+      fromAddress?: `0x${string}`;
+    };
+    cardano?: {
+      txHash: string;
+      outputIndex: number;
+      blockHeight?: string;
+      scriptHash?: string;
+      policyIdHex?: string;
+      assetNameHex?: string;
+      lockNonce?: string;
     };
   };
+  /** Optional echo of connected wallets (UI); recipient must still be a source-chain address, not Midnight. */
+  connected?: LockIntent['connected'];
   note?: string;
 };
 
@@ -88,4 +129,6 @@ export type RelayerJob = {
   };
   /** What the destination should do next (Midnight mint, EVM mint, etc.). */
   destinationHint?: string;
+  /** When computable: SHA-256 `depositCommitment` for `BURN_UNLOCK` (see DEPOSIT_COMMITMENT_ENCODING.md). */
+  depositCommitmentHex?: string;
 };

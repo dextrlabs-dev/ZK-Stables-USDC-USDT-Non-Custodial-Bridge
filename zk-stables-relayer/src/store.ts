@@ -4,6 +4,9 @@ const jobs = new Map<string, RelayerJob>();
 /** Deduplicate watcher-driven jobs (e.g. same burn log on relayer restart). */
 const processedEvmEvents = new Set<string>();
 const inflightEvmKeys = new Set<string>();
+/** Same pattern for Cardano lock UTxo anchors: `cardano:txHash:outputIndex`. */
+const processedCardanoUtxos = new Set<string>();
+const inflightCardanoKeys = new Set<string>();
 
 export function saveJob(job: RelayerJob): void {
   jobs.set(job.id, job);
@@ -46,4 +49,31 @@ export function reserveEvmEvent(key: string): boolean {
 
 export function releaseEvmEvent(key: string): void {
   inflightEvmKeys.delete(key);
+}
+
+export function cardanoUtxoDedupeKey(txHash: string, outputIndex: number): string {
+  return `cardano:${txHash}:${outputIndex}`;
+}
+
+export function isCardanoUtxoProcessed(key: string): boolean {
+  return processedCardanoUtxos.has(key);
+}
+
+export function markCardanoUtxoProcessed(key: string): void {
+  processedCardanoUtxos.add(key);
+}
+
+export function reserveCardanoUtxo(key: string): boolean {
+  if (processedCardanoUtxos.has(key)) return false;
+  if (inflightCardanoKeys.has(key)) return false;
+  inflightCardanoKeys.add(key);
+  return true;
+}
+
+export function releaseCardanoUtxo(key: string): void {
+  inflightCardanoKeys.delete(key);
+}
+
+export function isCardanoUtxoInflightOrDone(key: string): boolean {
+  return processedCardanoUtxos.has(key) || inflightCardanoKeys.has(key);
 }

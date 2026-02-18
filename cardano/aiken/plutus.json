@@ -1,0 +1,232 @@
+{
+  "preamble": {
+    "title": "zkstables/bridge_cardano",
+    "description": "ZK-Stables Cardano LockPool / UnlockPool (Phase 3) — Aiken Plutus v3",
+    "version": "0.1.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.9+2217206"
+    }
+  },
+  "validators": [
+    {
+      "title": "lock_pool.lock_pool.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "$ref": "#/definitions/zk_stables_bridge~1types~1LockDatum"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/lock_pool~1LockRedeemer"
+        }
+      },
+      "compiledCode": "5902e7010100323232323232322533300232323232325332330083001300937540042646644646464a66601c60060022a66602260206ea80240085854ccc038c01c00454ccc044c040dd50048010b0b18071baa0081533300c3001300d3754004264646464a666020600a60226ea80044c94ccc044cdc49bad301630173017301730173013375400a66644464a66602a601c602c6ea8004520001375a6034602e6ea8004c94ccc054c038c058dd50008a60103d87a8000132330010013756603660306ea8008894ccc068004530103d87a8000132333222533301b337220100062a66603666e3c02000c4c034cc07cdd400125eb80530103d87a8000133006006001375c60320026eb4c068004c078008c070004c8cc004004010894ccc0640045300103d87a8000132333222533301a337220100062a66603466e3c02000c4c030cc078dd300125eb80530103d87a8000133006006001375c60300026eacc064004c074008c06c004dd5980098099baa300130133754602c60266ea8008dd7180b180b980b98099baa005375c602c602e602e602e60266ea80144c8c94ccc04cc020c050dd50070998009bac30023015375401e6eb8c018c054dd5003899299980a1804980a9baa00113300237586006602c6ea8040dd7180c980b1baa00113300237586006602c6ea8040dd71802180b1baa00830183019301930193019301930193019301930193015375400e44646600200200644a66603200229404cc894ccc060cdc78010028a51133004004001375c603600260380024602e6030603060306030603060306030603000229408c058c05c00458c8cc004004dd6180198091baa00c22533301400114c0103d87a80001332253330133375e600c602a6ea80080284c014cc05c0092f5c0266008008002602c002602e0026e952000230130013011300e37540042c6e1d2000300e001300e300f001300a37540046e1d200216300b300c003300a002300900230090013004375400229309b2b2b9a5573aaae7955cfaba05742ae89",
+      "hash": "42c103f7b1e66ff4d16a23cea54a856c2190a326aca53cd859eb7025"
+    },
+    {
+      "title": "lock_pool.lock_pool.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "compiledCode": "5902e7010100323232323232322533300232323232325332330083001300937540042646644646464a66601c60060022a66602260206ea80240085854ccc038c01c00454ccc044c040dd50048010b0b18071baa0081533300c3001300d3754004264646464a666020600a60226ea80044c94ccc044cdc49bad301630173017301730173013375400a66644464a66602a601c602c6ea8004520001375a6034602e6ea8004c94ccc054c038c058dd50008a60103d87a8000132330010013756603660306ea8008894ccc068004530103d87a8000132333222533301b337220100062a66603666e3c02000c4c034cc07cdd400125eb80530103d87a8000133006006001375c60320026eb4c068004c078008c070004c8cc004004010894ccc0640045300103d87a8000132333222533301a337220100062a66603466e3c02000c4c030cc078dd300125eb80530103d87a8000133006006001375c60300026eacc064004c074008c06c004dd5980098099baa300130133754602c60266ea8008dd7180b180b980b98099baa005375c602c602e602e602e60266ea80144c8c94ccc04cc020c050dd50070998009bac30023015375401e6eb8c018c054dd5003899299980a1804980a9baa00113300237586006602c6ea8040dd7180c980b1baa00113300237586006602c6ea8040dd71802180b1baa00830183019301930193019301930193019301930193015375400e44646600200200644a66603200229404cc894ccc060cdc78010028a51133004004001375c603600260380024602e6030603060306030603060306030603000229408c058c05c00458c8cc004004dd6180198091baa00c22533301400114c0103d87a80001332253330133375e600c602a6ea80080284c014cc05c0092f5c0266008008002602c002602e0026e952000230130013011300e37540042c6e1d2000300e001300e300f001300a37540046e1d200216300b300c003300a002300900230090013004375400229309b2b2b9a5573aaae7955cfaba05742ae89",
+      "hash": "42c103f7b1e66ff4d16a23cea54a856c2190a326aca53cd859eb7025"
+    },
+    {
+      "title": "unlock_pool.unlock_pool.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "$ref": "#/definitions/zk_stables_bridge~1types~1RegistryDatum"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/zk_stables_bridge~1types~1RegistryRedeemer"
+        }
+      },
+      "parameters": [
+        {
+          "title": "operator",
+          "schema": {
+            "$ref": "#/definitions/VerificationKeyHash"
+          }
+        }
+      ],
+      "compiledCode": "5902db0101003232323232323223225333004323232323253323300a3001300b37540042646644a6646601c6002601e6ea801c4c8c94ccc04cc05800854ccc040c00cc044dd5002099191919299980a1803980a9baa0011325333015300c30163754002264646464a666032660026eb0c078c07cc07cc07cc07cc07cc07cc07cc07cc06cdd500980b8a99980c99b89371a0109040008a99980c99b88332300100122533301e0011480004cdc0240046600400460420026eb0c01cc06cdd5004a4100022a666032666032660026eb0c01cc06cdd50048042504a2200429405280a5014a044646600200200644a66603e00229404cc894ccc078cdc78010028a51133004004001375c604200260440026464660020026eb0c008c06cdd500991299980e8008a5013322533301c32533301d3014301e37540022a66603a66e3cdd71811180f9baa001008132533301e3370e9002180f9baa001132533301f30123020375400226464a666048604e004264660020020044464a66604e004266ebcc048c098dd50031ba700e1323002302b003375c605200460040042c6eb0c094004c084dd50008b181198101baa00114a0600c603e6ea800c5280a50300a301e37546014603c6ea8008528899802002000980f80098100009180e980f180f0009919198008009bac3006301a375401044a666038002200626603a603c00266004004603e002660346ea40152f5c06eb8c068c05cdd50008b180c980b1baa30023016375460326034602c6ea8c064c058dd50008b19198008009bac30023016375401c44a666030002298103d87a80001332253330173375e600a60326ea80080304cdd2a40006603600497ae0133004004001301a001301b00123018001375c602c60266ea8028c054c048dd50020b0b1bae30140013010375400e6e1d200016301000130103011001300c37540046e1d200216300d300e003300c002300b002300b0013006375400229309b2b1bae0015734aae7555cf2ab9f5740ae855d11",
+      "hash": "fa8e299677bef2d950fb20a4425fab014c5a5e7f5b2eb966292dde1d"
+    },
+    {
+      "title": "unlock_pool.unlock_pool.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "parameters": [
+        {
+          "title": "operator",
+          "schema": {
+            "$ref": "#/definitions/VerificationKeyHash"
+          }
+        }
+      ],
+      "compiledCode": "5902db0101003232323232323223225333004323232323253323300a3001300b37540042646644a6646601c6002601e6ea801c4c8c94ccc04cc05800854ccc040c00cc044dd5002099191919299980a1803980a9baa0011325333015300c30163754002264646464a666032660026eb0c078c07cc07cc07cc07cc07cc07cc07cc07cc06cdd500980b8a99980c99b89371a0109040008a99980c99b88332300100122533301e0011480004cdc0240046600400460420026eb0c01cc06cdd5004a4100022a666032666032660026eb0c01cc06cdd50048042504a2200429405280a5014a044646600200200644a66603e00229404cc894ccc078cdc78010028a51133004004001375c604200260440026464660020026eb0c008c06cdd500991299980e8008a5013322533301c32533301d3014301e37540022a66603a66e3cdd71811180f9baa001008132533301e3370e9002180f9baa001132533301f30123020375400226464a666048604e004264660020020044464a66604e004266ebcc048c098dd50031ba700e1323002302b003375c605200460040042c6eb0c094004c084dd50008b181198101baa00114a0600c603e6ea800c5280a50300a301e37546014603c6ea8008528899802002000980f80098100009180e980f180f0009919198008009bac3006301a375401044a666038002200626603a603c00266004004603e002660346ea40152f5c06eb8c068c05cdd50008b180c980b1baa30023016375460326034602c6ea8c064c058dd50008b19198008009bac30023016375401c44a666030002298103d87a80001332253330173375e600a60326ea80080304cdd2a40006603600497ae0133004004001301a001301b00123018001375c602c60266ea8028c054c048dd50020b0b1bae30140013010375400e6e1d200016301000130103011001300c37540046e1d200216300d300e003300c002300b002300b0013006375400229309b2b1bae0015734aae7555cf2ab9f5740ae855d11",
+      "hash": "fa8e299677bef2d950fb20a4425fab014c5a5e7f5b2eb966292dde1d"
+    }
+  ],
+  "definitions": {
+    "AssetName": {
+      "title": "AssetName",
+      "dataType": "bytes"
+    },
+    "ByteArray": {
+      "dataType": "bytes"
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "List$ByteArray": {
+      "dataType": "list",
+      "items": {
+        "$ref": "#/definitions/ByteArray"
+      }
+    },
+    "Option$VerificationKeyHash": {
+      "title": "Option",
+      "anyOf": [
+        {
+          "title": "Some",
+          "description": "An optional value.",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "$ref": "#/definitions/VerificationKeyHash"
+            }
+          ]
+        },
+        {
+          "title": "None",
+          "description": "Nothing.",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "PolicyId": {
+      "title": "PolicyId",
+      "dataType": "bytes"
+    },
+    "VerificationKeyHash": {
+      "title": "VerificationKeyHash",
+      "dataType": "bytes"
+    },
+    "lock_pool/LockRedeemer": {
+      "title": "LockRedeemer",
+      "description": "Redeemer must live in this module so nullary constructors resolve in `when` (see aiken gift_card Action).",
+      "anyOf": [
+        {
+          "title": "UserRefund",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "BridgeRelease",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "zk_stables_bridge/types/LockDatum": {
+      "title": "LockDatum",
+      "description": "On-chain fields that align with [`contract/docs/DEPOSIT_COMMITMENT_ENCODING.md`](../../contract/docs/DEPOSIT_COMMITMENT_ENCODING.md):\n off-chain builds `event_commitment` from policy/name, observed txid, output_index, and `lock_nonce`.",
+      "anyOf": [
+        {
+          "title": "LockDatum",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "depositor",
+              "$ref": "#/definitions/VerificationKeyHash"
+            },
+            {
+              "title": "recipient",
+              "$ref": "#/definitions/VerificationKeyHash"
+            },
+            {
+              "title": "policy_id",
+              "$ref": "#/definitions/PolicyId"
+            },
+            {
+              "title": "asset_name",
+              "$ref": "#/definitions/AssetName"
+            },
+            {
+              "title": "amount",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "lock_nonce",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "recipient_commitment",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "source_chain_id",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "destination_chain_id",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "bridge_operator",
+              "$ref": "#/definitions/Option$VerificationKeyHash"
+            }
+          ]
+        }
+      ]
+    },
+    "zk_stables_bridge/types/RegistryDatum": {
+      "title": "RegistryDatum",
+      "anyOf": [
+        {
+          "title": "RegistryDatum",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "used_nonces",
+              "$ref": "#/definitions/List$ByteArray"
+            }
+          ]
+        }
+      ]
+    },
+    "zk_stables_bridge/types/RegistryRedeemer": {
+      "title": "RegistryRedeemer",
+      "anyOf": [
+        {
+          "title": "RegistryRedeemer",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "nonce",
+              "$ref": "#/definitions/ByteArray"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

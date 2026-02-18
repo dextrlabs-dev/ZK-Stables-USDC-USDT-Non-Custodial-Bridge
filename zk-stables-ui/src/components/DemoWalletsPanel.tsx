@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import {
   Alert,
-  Box,
   Button,
   Card,
   CardContent,
@@ -56,35 +55,35 @@ export const DemoWalletsPanel: React.FC = () => {
   if (!enabled) return null;
 
   return (
-    <Card id="panel-demo-wallets" variant="outlined" sx={{ borderColor: 'secondary.dark' }}>
+    <Card id="panel-demo-wallets" variant="outlined" sx={{ borderColor: 'divider' }}>
       <CardContent>
-        <Typography variant="h6" gutterBottom>
-          Test wallet demo (all chains)
+        <Typography variant="h6" component="h3" gutterBottom>
+          Quick test identities
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Loads <strong>EVM</strong> via wagmi <code>mock</code> connector (Hardhat/Anvil public keys — dev only) and a
-          synthetic <strong>Cardano</strong> row for UI. <strong>Midnight</strong> still requires real Lace; example
-          shielded address is shown for copy/paste and local funding scripts.
+          One-click load of <strong>EVM</strong> test accounts (wagmi <code>mock</code> connector — public Anvil/Hardhat keys)
+          and a fake <strong>Cardano</strong> row for UI testing. <strong>Midnight</strong> still needs Lace or dev seed; the
+          table shows a sample shielded address for local scripts when Lace is not connected.
         </Typography>
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Demo EVM keys are well-known; never hold real funds on those accounts.
+          These EVM keys are public — never use them for real money or mainnet.
         </Alert>
         <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
-          <Button variant="contained" color="secondary" disabled={evmBusy || !mockConnector} onClick={loadAllDemos}>
-            Load EVM mock + Cardano demo
+          <Button variant="contained" color="primary" disabled={evmBusy || !mockConnector} onClick={loadAllDemos}>
+            Load EVM + Cardano test rows
           </Button>
           <Button variant="outlined" disabled={evmBusy} onClick={() => mockConnector && connect({ connector: mockConnector })}>
-            EVM mock only
+            EVM test accounts only
           </Button>
           <Button variant="outlined" onClick={applyDemoCardano}>
-            Cardano demo only
+            Cardano synthetic row only
           </Button>
           <Button variant="outlined" color="inherit" onClick={clearDemos}>
-            Clear demo EVM + Cardano
+            Clear EVM and Cardano test rows
           </Button>
           {isConnected && (
             <Button variant="text" size="small" onClick={() => switchChain({ chainId: localhost.id })}>
-              Switch EVM to Localhost 8545
+              Point EVM wallet at Localhost (8545)
             </Button>
           )}
         </Stack>
@@ -93,7 +92,7 @@ export const DemoWalletsPanel: React.FC = () => {
             <TableRow>
               <TableCell>Chain</TableCell>
               <TableCell>Mode</TableCell>
-              <TableCell>Address / hint</TableCell>
+              <TableCell>Address or placeholder</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -108,12 +107,12 @@ export const DemoWalletsPanel: React.FC = () => {
               </TableCell>
               <TableCell>
                 {address ? (
-                  <Box component="code" sx={{ wordBreak: 'break-all', fontSize: 12 }}>
+                  <Typography variant="dataMono" sx={{ wordBreak: 'break-all' }}>
                     {address}
-                  </Box>
+                  </Typography>
                 ) : (
                   <Typography variant="body2" color="text.secondary">
-                    Not connected — use buttons above or EVM card
+                    Not connected — use the buttons above or the Ethereum card
                   </Typography>
                 )}
                 {isConnected && chain && (
@@ -126,43 +125,43 @@ export const DemoWalletsPanel: React.FC = () => {
             <TableRow>
               <TableCell>Cardano</TableCell>
               <TableCell>
-                {isDemoCardano ? 'Demo (no extension)' : cardanoWalletKey ? `CIP-30: ${cardanoWalletKey}` : '—'}
+                {isDemoCardano ? 'Synthetic' : cardanoWalletKey ? `Wallet: ${cardanoWalletKey}` : '—'}
               </TableCell>
               <TableCell>
                 {cardanoWalletKey ? (
                   <>
                     {cardanoBech32Preview && (
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                      <Typography variant="dataMono" sx={{ wordBreak: 'break-all' }}>
                         {cardanoBech32Preview}
                       </Typography>
                     )}
-                    <Box component="code" sx={{ wordBreak: 'break-all', fontSize: 11, display: 'block' }}>
+                    <Typography variant="dataMonoDense" sx={{ wordBreak: 'break-all', display: 'block', mt: 0.5 }}>
                       {cardanoUsedAddressesHex[0] ?? cardanoDisplay}
-                    </Box>
+                    </Typography>
                   </>
                 ) : (
                   <Typography variant="body2" color="text.secondary">
-                    Load demo or use Cardano card with Eternl / Nami / …
+                    Load a synthetic row or connect a real wallet in the Cardano card
                   </Typography>
                 )}
               </TableCell>
             </TableRow>
             <TableRow>
               <TableCell>Midnight</TableCell>
-              <TableCell>{laceOk ? connectorDisplayName ?? 'Lace' : 'Connect in Lace card'}</TableCell>
+              <TableCell>{laceOk ? connectorDisplayName ?? 'Lace' : 'Not connected — use Midnight Lace card'}</TableCell>
               <TableCell>
                 {laceAddr ? (
-                  <Box component="code" sx={{ wordBreak: 'break-all', fontSize: 12 }}>
+                  <Typography variant="dataMono" sx={{ wordBreak: 'break-all' }}>
                     {laceAddr}
-                  </Box>
+                  </Typography>
                 ) : (
                   <>
                     <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-                      Example shielded (undeployed) for local funding tests:
+                      Sample shielded address (undeployed network) for local funding scripts:
                     </Typography>
-                    <Box component="code" sx={{ wordBreak: 'break-all', fontSize: 11 }}>
+                    <Typography variant="dataMonoDense" sx={{ wordBreak: 'break-all' }}>
                       {DEMO_MIDNIGHT_SHIELDED}
-                    </Box>
+                    </Typography>
                   </>
                 )}
               </TableCell>

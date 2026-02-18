@@ -77,20 +77,11 @@ async function main(): Promise<void> {
     bytes: ledger.encodeUserAddress(walletCtx.unshieldedKeystore.getAddress()),
   };
 
-  let r = await callTx.proveHolder();
-  logTx('proveHolder', r.public);
-
-  r = await callTx.mintWrappedUnshielded();
-  logTx('mintWrappedUnshielded', r.public);
-
-  r = await callTx.initiateBurn(2n, hexToBytes32('aa'.repeat(32)));
-  logTx('initiateBurn', r.public);
-
-  r = await callTx.sendWrappedUnshieldedToUser(recipientUserAddr);
-  logTx('sendWrappedUnshieldedToUser', r.public);
-
-  r = await callTx.finalizeBurn();
-  logTx('finalizeBurn', r.public);
+  logTx('proveHolder', (await callTx.proveHolder()).public);
+  logTx('mintWrappedUnshielded', (await callTx.mintWrappedUnshielded()).public);
+  logTx('initiateBurn', (await callTx.initiateBurn(2n, hexToBytes32('aa'.repeat(32)))).public);
+  logTx('sendWrappedUnshieldedToUser', (await callTx.sendWrappedUnshieldedToUser(recipientUserAddr)).public);
+  logTx('finalizeBurn', (await callTx.finalizeBurn()).public);
 
   console.log('Done. All circuits submitted and finalized.');
 }

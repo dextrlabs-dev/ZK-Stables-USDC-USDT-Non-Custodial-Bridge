@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "patch-package",
     "copy-zk-artifacts": "node scripts/copy-zk-artifacts.mjs",
     "dev": "npm run copy-zk-artifacts && vite",
     "build": "npm run copy-zk-artifacts && tsc --noEmit && vite build",
@@ -17,7 +16,7 @@
     "@emotion/styled": "^11.14.0",
     "@midnight-ntwrk/compact-js": "2.5.0",
     "@midnight-ntwrk/compact-runtime": "0.15.0",
-    "@midnight-ntwrk/dapp-connector-api": "4.0.0",
+    "@midnight-ntwrk/dapp-connector-api": "4.0.1",
     "@midnight-ntwrk/ledger-v8": "8.0.3",
     "@midnight-ntwrk/midnight-js-contracts": "4.0.2",
     "@midnight-ntwrk/midnight-js-fetch-zk-config-provider": "4.0.2",
@@ -25,7 +24,7 @@
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "4.0.2",
     "@midnight-ntwrk/midnight-js-network-id": "4.0.2",
     "@midnight-ntwrk/midnight-js-types": "4.0.2",
-    "@midnight-ntwrk/wallet-sdk-address-format": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.1.0",
     "@midnight-ntwrk/wallet-sdk-facade": "3.0.0",
     "@midnight-ntwrk/wallet-sdk-hd": "3.0.1",
     "@mui/icons-material": "^7.3.6",
@@ -48,6 +47,7 @@
     "patch-package": "^8.0.1",
     "typescript": "^5.9.3",
     "vite": "^6.3.5",
+    "vite-plugin-pwa": "^1.2.0",
     "vite-plugin-top-level-await": "^1.5.0",
     "vite-plugin-wasm": "^3.4.1"
   }

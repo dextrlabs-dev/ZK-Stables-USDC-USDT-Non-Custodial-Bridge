@@ -55,7 +55,9 @@ export async function initDevWalletFromSeedHash(params: {
   const baseConfiguration = {
     networkId: params.networkId,
     costParameters: {
-      additionalFeeOverhead: 0n,
+      // Match local-cli `wallet.ts` / [example-counter dust `costParameters`](https://github.com/midnightntwrk/example-counter):
+      // `0` can pass light txs but heavier contract calls fail submit with Custom error 138.
+      additionalFeeOverhead: 300_000_000_000_000_000n,
       feeBlocksMargin: 5,
     },
     indexerClientConnection: {

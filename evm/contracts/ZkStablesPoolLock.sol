@@ -95,10 +95,15 @@ contract ZkStablesPoolLock {
     require(computedLeaf == leaf, "leaf");
     require(MerkleProof.verify(merkleProof, merkleRoot, leaf), "merkle");
 
-    (uint256 amountInLog, bytes32 burnNonce) = abi.decode(logData, (uint256, bytes32));
+    (uint256 amountInLog, bytes32 burnNonce, bytes32 burnCommitmentInLog) = abi.decode(
+      logData,
+      (uint256, bytes32, bytes32)
+    );
     require(amountInLog == amount, "amount");
     require(!burnNonceUsed[burnNonce], "burn nonce used");
     burnNonceUsed[burnNonce] = true;
+    // burnCommitmentInLog is part of the Burned log for Midnight / ZK binding (verified off-chain or in future verifier).
+    require(burnCommitmentInLog != bytes32(0), "burn commitment");
 
     address recipientOnSource = address(uint160(uint256(topic2)));
     require(recipientOnSource == recipient, "recipient");

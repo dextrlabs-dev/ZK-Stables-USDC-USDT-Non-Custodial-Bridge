@@ -85,7 +85,9 @@ export const LaceWalletCard: React.FC = () => {
     <Card variant="outlined" sx={{ borderColor: isConnected ? 'primary.dark' : undefined }}>
       <CardContent>
         <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1} sx={{ mb: 1 }}>
-          <Typography variant="h6">Midnight Lace</Typography>
+          <Typography variant="h6" component="h3">
+            Midnight Lace
+          </Typography>
           <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
             <Chip size="small" label={`dApp network: ${net}`} variant="outlined" />
             {isConnected && connectorDisplayName && (
@@ -95,17 +97,17 @@ export const LaceWalletCard: React.FC = () => {
         </Stack>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Connect the same way as{' '}
+          Same connection pattern as{' '}
           <Link href="https://github.com/midnightntwrk/example-zkloan" target="_blank" rel="noreferrer">
             example-zkloan
           </Link>
-          : the dApp uses <code>window.midnight.mnLace</code> (or the first registered connector), then{' '}
-          <code>connect(VITE_NETWORK_ID)</code>.
+          : this app talks to Lace through <code>window.midnight</code> and connects using your{' '}
+          <code>VITE_NETWORK_ID</code>.
         </Typography>
 
         {!extensionPresent && (
           <Alert severity="warning" sx={{ mb: 2 }}>
-            No <code>window.midnight</code> API yet. Install Lace, enable it for this origin, then refresh.{' '}
+            Midnight browser API not found. Install the Lace extension, allow this site, then refresh.{' '}
             <Link href={LACE_CHROME_STORE} target="_blank" rel="noreferrer">
               Chrome Web Store
             </Link>
@@ -139,7 +141,7 @@ export const LaceWalletCard: React.FC = () => {
 
         {walletAddress && (
           <Typography variant="body2" sx={{ mb: 2 }}>
-            Shielded address:{' '}
+            Shielded (Zswap) address:{' '}
             <Box component="code" sx={{ wordBreak: 'break-all', display: 'block', mt: 0.5 }}>
               {walletAddress}
             </Box>
@@ -151,7 +153,7 @@ export const LaceWalletCard: React.FC = () => {
             {isConnecting ? 'Connecting…' : 'Connect Lace'}
           </Button>
           <Button variant="contained" color="secondary" disabled={isConnecting || isConnected} onClick={() => void onConnectSeed()}>
-            Connect dev seed (no Lace)
+            Use dev seed instead of Lace
           </Button>
           <Button variant="outlined" color="inherit" disabled={!isConnected || isConnecting} onClick={onDisconnect}>
             Disconnect
@@ -161,12 +163,12 @@ export const LaceWalletCard: React.FC = () => {
         {!isConnected && (
           <Box sx={{ mt: 2 }}>
             <TextField
-              label="Dev seed hash (64 hex, undeployed)"
+              label="Dev seed (64 hex)"
               size="small"
               fullWidth
               value={seedHex}
               onChange={(e) => setSeedHex(e.target.value.trim().replace(/^0x/, ''))}
-              helperText="Uses local midnight-local-network ports (9944/8088/6300). Dev only."
+              helperText="Expects local Midnight stack (node, indexer, proof server). Not for production."
             />
           </Box>
         )}

@@ -6,7 +6,8 @@
   "scripts": {
     "deploy": "tsx src/deploy-local.ts",
     "run-all": "tsx src/run-all-operations.ts",
-    "postinstall": "patch-package"
+    "run-genesis": "tsx src/run-genesis-all.ts",
+    "run-registry-all": "tsx src/run-registry-all-operations.ts"
   },
   "dependencies": {
     "@zk-stables/midnight-contract": "file:../contract",
@@ -21,6 +22,7 @@
     "@midnight-ntwrk/midnight-js-node-zk-config-provider": "4.0.2",
     "@midnight-ntwrk/midnight-js-types": "4.0.2",
     "@midnight-ntwrk/midnight-js-utils": "4.0.2",
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.1.0",
     "@midnight-ntwrk/wallet-sdk-facade": "3.0.0",
     "@midnight-ntwrk/wallet-sdk-hd": "3.0.1",
     "bip39": "^3.1.0",

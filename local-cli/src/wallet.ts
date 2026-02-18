@@ -24,14 +24,18 @@ const INDEXER_PORT = Number.parseInt(process.env['INDEXER_PORT'] ?? '8088', 10);
 const NODE_PORT = Number.parseInt(process.env['NODE_PORT'] ?? '9944', 10);
 const PROOF_SERVER_PORT = Number.parseInt(process.env['PROOF_SERVER_PORT'] ?? '6300', 10);
 
-const INDEXER_HTTP_URL = `http://127.0.0.1:${INDEXER_PORT}/api/v3/graphql`;
-const INDEXER_WS_URL = `ws://127.0.0.1:${INDEXER_PORT}/api/v3/graphql/ws`;
+const INDEXER_HTTP_URL = `http://127.0.0.1:${INDEXER_PORT}/api/v4/graphql`;
+const INDEXER_WS_URL = `ws://127.0.0.1:${INDEXER_PORT}/api/v4/graphql/ws`;
 
 const baseConfiguration: ShieldedConfiguration & DustConfiguration = {
   networkId: 'undeployed',
   costParameters: {
-    /** Brick Towers default is 300e15; local dust balances after `fund-and-register-dust` are often smaller. */
-    additionalFeeOverhead: 0n,
+    /**
+     * Match [midnight-local-network `src/utils.ts`](https://github.com/bricktowers/midnight-local-network):
+     * `0` overhead works for small txs (deploy) but larger contract calls (e.g. proveHolder) can be rejected by the
+     * node with `Invalid Transaction: Custom error: 138` when dust fee margin is too tight.
+     */
+    additionalFeeOverhead: 300_000_000_000_000_000n,
     feeBlocksMargin: 5,
   },
   indexerClientConnection: {

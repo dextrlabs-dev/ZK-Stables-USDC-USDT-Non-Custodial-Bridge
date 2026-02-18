@@ -1,6 +1,7 @@
 import type { Logger } from 'pino';
 import type { Address } from 'viem';
 import { fetchLockEvents } from '../adapters/evmLocks.js';
+import { mergeRelayerBridgeIntoConnected } from '../config/bridgeRecipients.js';
 import { enqueueLockIntent } from '../pipeline/runJob.js';
 
 /**
@@ -34,11 +35,11 @@ export async function runEvmLockWatcher(logger: Logger): Promise<void> {
       if (safeTo >= cursor) {
         const events = await fetchLockEvents({ rpcUrl, poolLockAddress: pool, fromBlock: cursor, toBlock: safeTo });
         for (const e of events) {
-          const job = await enqueueLockIntent(logger, {
-            operation: 'LOCK',
-            sourceChain: 'evm',
+          const intent = {
+            operation: 'LOCK' as const,
+            sourceChain: 'evm' as const,
             destinationChain: 'evm',
-            asset: 'USDC',
+            asset: 'USDC' as const,
             assetKind: 0,
             amount: e.amount.toString(),
             recipient: e.recipient,
@@ -53,7 +54,9 @@ export async function runEvmLockWatcher(logger: Logger): Promise<void> {
               },
             },
             note: 'ingested from EVM Locked event',
-          });
+          };
+          mergeRelayerBridgeIntoConnected(intent);
+          const job = await enqueueLockIntent(logger, intent);
           if (!job) continue;
         }
         cursor = safeTo + 1n;

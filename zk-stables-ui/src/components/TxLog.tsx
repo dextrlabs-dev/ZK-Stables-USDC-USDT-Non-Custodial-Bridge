@@ -17,34 +17,49 @@ export const TxLog: React.FC = () => {
   return (
     <Card id="panel-tx-log" variant="outlined">
       <CardContent>
-        <Typography variant="h6" gutterBottom>
-          Transaction log
+        <Typography variant="h6" component="h3" gutterBottom>
+          Midnight transaction log
         </Typography>
         {txLog.length === 0 ? (
-          <Typography color="text.secondary">No transactions yet.</Typography>
+          <Typography variant="body2" color="text.secondary">
+            No Midnight transactions recorded yet. Deploy or join a contract, then run steps in <strong>Midnight contract
+            actions</strong> — rows will appear here with ids and hashes.
+          </Typography>
         ) : (
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>Step</TableCell>
-                <TableCell>txId</TableCell>
-                <TableCell>txHash</TableCell>
-                <TableCell>block</TableCell>
-                <TableCell>time</TableCell>
+                <TableCell>Transaction id</TableCell>
+                <TableCell>Transaction hash</TableCell>
+                <TableCell>Block</TableCell>
+                <TableCell>Time</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {txLog.map((row) => (
                 <TableRow key={`${row.label}-${row.txId}-${row.at}`}>
                   <TableCell>{row.label}</TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: 11, maxWidth: 160, wordBreak: 'break-all' }}>
+                  <TableCell
+                    sx={(t) => ({
+                      ...t.typography.dataMonoDense,
+                      maxWidth: 160,
+                      wordBreak: 'break-all',
+                    })}
+                  >
                     {row.txId}
                   </TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: 11, maxWidth: 160, wordBreak: 'break-all' }}>
+                  <TableCell
+                    sx={(t) => ({
+                      ...t.typography.dataMonoDense,
+                      maxWidth: 160,
+                      wordBreak: 'break-all',
+                    })}
+                  >
                     {row.txHash}
                   </TableCell>
-                  <TableCell>{row.blockHeight?.toString() ?? '—'}</TableCell>
-                  <TableCell sx={{ fontSize: 12 }}>{row.at}</TableCell>
+                  <TableCell sx={{ fontVariantNumeric: 'tabular-nums' }}>{row.blockHeight?.toString() ?? '—'}</TableCell>
+                  <TableCell sx={{ typography: 'caption' }}>{row.at}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

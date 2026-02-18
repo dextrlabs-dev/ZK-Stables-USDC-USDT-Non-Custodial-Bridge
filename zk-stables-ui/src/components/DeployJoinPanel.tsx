@@ -90,16 +90,16 @@ export const DeployJoinPanel: React.FC = () => {
       <LaceWalletCard />
       <Card variant="outlined">
         <CardContent>
-          <Typography variant="h6" gutterBottom>
+          <Typography variant="h6" component="h3" gutterBottom>
             Deploy and join
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Dev demo: operator and holder secrets stay in this browser tab only. Connect Lace above, then deploy or join
-            on network <code>{net}</code>.
+            Operator and holder keys you enter here stay in this browser tab only (development use). Connect Midnight Lace in
+            the card above, then deploy a new contract or join an existing one on <code>{net}</code>.
           </Typography>
           {!isConnected && (
             <Alert severity="info" sx={{ mb: 2 }}>
-              Connect Midnight Lace first (shielded address appears in the card above).
+              Connect Midnight Lace first — your shielded address shows in the Lace card when ready.
             </Alert>
           )}
           {flowMessage && (
@@ -116,16 +116,16 @@ export const DeployJoinPanel: React.FC = () => {
           )}
 
           <Typography variant="subtitle2" sx={{ mt: 2 }}>
-            Deploy (new instance)
+            Deploy new contract
           </Typography>
           <Stack spacing={1.5} sx={{ mt: 1, mb: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              Prefill (recommended): paste a <b>genesis seed hash</b> (64 hex) or any string. We derive deterministic
-              `depositCommitment`, operator SK, and holder SK for reproducible Midnight deploys.
+              Recommended: paste a <strong>genesis seed hash</strong> (64 hex characters) or any string. The app derives a
+              deposit commitment and operator/holder secret keys so repeated deploys from the same seed match.
             </Typography>
             {genesisErr && <Alert severity="error">{genesisErr}</Alert>}
             <TextField
-              label="Genesis seed hash (64 hex) or string"
+              label="Genesis seed (64 hex or any string)"
               fullWidth
               size="small"
               value={genesisSeedInput}
@@ -133,10 +133,10 @@ export const DeployJoinPanel: React.FC = () => {
             />
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <Button variant="outlined" onClick={() => void deriveFromGenesis()}>
-                Derive deploy params from genesis seed
+                Derive keys from genesis seed
               </Button>
               <Button variant="contained" disabled={deployJoinDisabled} onClick={() => void runGenesisDemo()}>
-                One-click Genesis deploy + run all Midnight ops
+                Deploy from seed and run full Midnight demo
               </Button>
               <Button
                 variant="text"
@@ -144,17 +144,17 @@ export const DeployJoinPanel: React.FC = () => {
                   setDeployParams((p) => ({ ...p, sourceChainId: '31337', amount: '1000000', assetKind: AssetKind.USDC }));
                 }}
               >
-                Prefill local demo (sourceChainId=31337, 1e6, USDC)
+                Fill local Anvil defaults (chain 31337, 1e6, USDC)
               </Button>
             </Box>
             {genesisSeedHashHex && (
               <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
-                normalized genesisSeedHash: <code>{genesisSeedHashHex}</code>
+                Normalized genesis seed hash: <code>{genesisSeedHashHex}</code>
               </Typography>
             )}
 
             <TextField
-              label="Deposit commitment (64 hex)"
+              label="Deposit commitment (64 hex chars)"
               fullWidth
               size="small"
               value={deployParams.depositCommitmentHex}
@@ -177,7 +177,7 @@ export const DeployJoinPanel: React.FC = () => {
               onChange={(e) => setDeployParams((p) => ({ ...p, sourceChainId: e.target.value }))}
             />
             <TextField
-              label="Amount (ledger units)"
+              label="Amount (ledger integer string)"
               size="small"
               value={deployParams.amount}
               onChange={(e) => setDeployParams((p) => ({ ...p, amount: e.target.value }))}
@@ -201,7 +201,7 @@ export const DeployJoinPanel: React.FC = () => {
             </Button>
           </Stack>
 
-          <Typography variant="subtitle2">Join existing</Typography>
+          <Typography variant="subtitle2">Join existing contract</Typography>
           <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
             <TextField
               label="Contract address"

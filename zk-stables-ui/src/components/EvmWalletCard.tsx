@@ -29,17 +29,17 @@ export const EvmWalletCard: React.FC = () => {
   return (
     <Card id="panel-evm" variant="outlined">
       <CardContent>
-        <Typography variant="h6" gutterBottom>
+        <Typography variant="h6" component="h3" gutterBottom>
           Ethereum (EVM)
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          SRS: lock and unlock on EVM use wallet signing against pool contracts. For a local **Foundry Anvil** node, run{' '}
-          <code>./scripts/anvil-docker.sh</code> from the repo root (RPC <code>http://127.0.0.1:8545</code>, chain{' '}
-          <strong>31337</strong>), then switch this wallet to <strong>Localhost</strong> and import a test key if needed.
+          Connect a browser wallet to sign EVM lock and unlock transactions against pool contracts. For local dev, run{' '}
+          <code>./scripts/anvil-docker.sh</code> (RPC <code>http://127.0.0.1:8545</code>, chain id <strong>31337</strong>),
+          then in this UI switch to <strong>Localhost</strong> and use a test account.
         </Typography>
         {connectError && (
           <Alert severity="error" sx={{ mb: 2 }}>
-            {connectError.message}
+            Could not connect the wallet. {connectError.message}
           </Alert>
         )}
         {isConnected && address && (
@@ -53,12 +53,12 @@ export const EvmWalletCard: React.FC = () => {
         )}
         {!isConnected && (
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            Status: {status}
+            Wallet status: {status}
           </Typography>
         )}
         <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 1 }}>
           <Button variant="contained" disabled={isConnected || isConnectPending || !connectors[0]} onClick={onConnect}>
-            {isConnectPending ? 'Connecting…' : 'Connect EVM wallet'}
+            {isConnectPending ? 'Connecting…' : 'Connect wallet'}
           </Button>
           {demoWalletsEnabled() && mockConnector && (
             <Button
@@ -67,7 +67,7 @@ export const EvmWalletCard: React.FC = () => {
               disabled={isConnected || isConnectPending}
               onClick={() => connect({ connector: mockConnector })}
             >
-              Demo (mock Anvil)
+              Use Anvil demo account
             </Button>
           )}
           <Button variant="outlined" disabled={!isConnected} onClick={() => disconnect()}>

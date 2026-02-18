@@ -1,0 +1,23 @@
+{
+  "name": "zk-stables-usdc-usdt",
+  "private": true,
+  "description": "Workspace root: single node_modules for contract + local-cli + UI (avoids duplicate compact/onchain-runtime WASM).",
+  "workspaces": [
+    "contract",
+    "local-cli",
+    "zk-stables-ui"
+  ],
+  "scripts": {
+    "postinstall": "patch-package --patch-dir local-cli/patches",
+    "contract:compact": "npm run compact -w @zk-stables/midnight-contract",
+    "contract:build": "npm run build -w @zk-stables/midnight-contract",
+    "run-genesis": "npm run run-genesis -w @zk-stables/local-cli",
+    "run-registry-all": "npm run run-registry-all -w @zk-stables/local-cli"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.0"
+  },
+  "overrides": {
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.1.0"
+  }
+}

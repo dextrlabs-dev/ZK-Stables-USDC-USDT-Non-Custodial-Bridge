@@ -14,7 +14,13 @@ contract ZkStablesWrappedToken {
 
   event Transfer(address indexed from, address indexed to, uint256 value);
   event Approval(address indexed owner, address indexed spender, uint256 value);
-  event Burned(address indexed from, address indexed recipientOnSource, uint256 amount, bytes32 nonce);
+  event Burned(
+    address indexed from,
+    address indexed recipientOnSource,
+    uint256 amount,
+    bytes32 nonce,
+    bytes32 burnCommitment
+  );
 
   constructor(string memory _name, string memory _symbol, uint8 _decimals, address _bridgeMinter) {
     name = _name;
@@ -51,14 +57,14 @@ contract ZkStablesWrappedToken {
     emit Transfer(address(0), to, amount);
   }
 
-  function burn(uint256 amount, address recipientOnSource, bytes32 nonce) external {
+  function burn(uint256 amount, address recipientOnSource, bytes32 nonce, bytes32 burnCommitment) external {
     require(balanceOf[msg.sender] >= amount, "balance");
     unchecked {
       balanceOf[msg.sender] -= amount;
       totalSupply -= amount;
     }
     emit Transfer(msg.sender, address(0), amount);
-    emit Burned(msg.sender, recipientOnSource, amount, nonce);
+    emit Burned(msg.sender, recipientOnSource, amount, nonce, burnCommitment);
   }
 
   function _transfer(address from, address to, uint256 amount) internal {

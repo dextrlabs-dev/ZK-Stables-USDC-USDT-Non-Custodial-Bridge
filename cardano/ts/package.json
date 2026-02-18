@@ -1,0 +1,28 @@
+{
+  "name": "@zk-stables/cardano-offchain",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "postinstall": "node scripts/fix-libsodium.mjs",
+    "typecheck": "tsc --noEmit",
+    "lock": "tsx src/cli/lock.ts",
+    "refund": "tsx src/cli/refund.ts",
+    "release": "tsx src/cli/release.ts",
+    "yaci:smoke": "tsx src/cli/yaci-smoke.ts",
+    "registry:init": "tsx src/cli/registry-init.ts",
+    "registry:append": "tsx src/cli/registry-append.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@meshsdk/core": "^1.8.14",
+    "@meshsdk/core-csl": "^1.8.14",
+    "@types/node": "^22.19.15",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -10,12 +10,15 @@ import {
   CardContent,
   Chip,
   Link,
+  ListSubheader,
+  MenuItem,
   Stack,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -27,6 +30,17 @@ function scrollToId(id: string) {
   const el = document.getElementById(id);
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
+
+const JUMP_SECTION_LABELS: Record<string, string> = {
+  'panel-cross-chain-intent': 'Cross-chain intents',
+  'panel-circuits': 'Midnight contract actions',
+  'panel-tx-log': 'Transaction log',
+  'panel-demo-wallets': 'Test wallet demo',
+  'panel-midnight-deploy': 'Midnight deploy & Lace',
+  'panel-evm': 'EVM wallet',
+  'panel-cardano': 'Cardano wallet',
+  'panel-bridge-state': 'On-chain bridge state',
+};
 
 const Jump: React.FC<{ id: string; children: React.ReactNode }> = ({ id, children }) => (
   <Link
@@ -47,53 +61,75 @@ const Jump: React.FC<{ id: string; children: React.ReactNode }> = ({ id, childre
  */
 export const FullDemoRundown: React.FC = () => {
   const relayerBase = defaultRelayerHealth();
+  const [jumpValue, setJumpValue] = useState('');
 
   const openRelayerHealth = useCallback(() => {
     window.open(`${relayerBase}/v1/health/chains`, '_blank', 'noopener,noreferrer');
   }, [relayerBase]);
 
+  const onJumpChange = useCallback((id: string) => {
+    setJumpValue('');
+    if (id) scrollToId(id);
+  }, []);
+
   return (
-    <Card id="full-demo-rundown" variant="outlined" sx={{ borderColor: 'primary.dark' }}>
+    <Card id="full-demo-rundown" variant="outlined" sx={{ borderColor: 'divider' }}>
       <CardContent>
-        <Typography variant="h5" component="h2" gutterBottom>
-          Full demo rundown (SRS & architecture blueprint)
+        <Typography variant="h5" component="h2" gutterBottom sx={{ letterSpacing: '-0.01em' }}>
+          Spec and architecture reference
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          This walkthrough mirrors the official documents: non-custodial pools, relayer observation, proof generation,
-          destination mint/release, burn, and source unlock. The reference UI implements a dev slice (local EVM + Midnight
-          Compact + relayer); production targets add full SNARK verification and Cardano/Plutus parity.
+          Background on pools, relayer, proofs, mint/release, burn, and unlock (aligned with the project SRS and blueprint).
+          Open a section when you need detail. Day-to-day testing starts in <strong>Cross-chain intents</strong> above.
         </Typography>
 
-        <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
-          <Button size="small" variant="contained" onClick={() => scrollToId('panel-cross-chain-intent')}>
-            Cross-chain intents
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => scrollToId('panel-midnight-deploy')}>
-            Midnight deploy & wallet
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => scrollToId('panel-evm')}>
-            EVM wallet
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => scrollToId('panel-cardano')}>
-            Cardano wallet
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => scrollToId('panel-bridge-state')}>
-            On-chain bridge state
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => scrollToId('panel-circuits')}>
-            Circuits
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => scrollToId('panel-tx-log')}>
-            Transaction log
-          </Button>
-          <Button size="small" variant="text" onClick={openRelayerHealth}>
-            Relayer health (open)
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }} sx={{ mb: 2 }}>
+          <TextField
+            select
+            size="small"
+            label="Jump to section"
+            value={jumpValue}
+            onChange={(e) => onJumpChange(e.target.value)}
+            sx={{ minWidth: { xs: '100%', sm: 260 } }}
+            SelectProps={{
+              displayEmpty: true,
+              renderValue: (v) => {
+                const id = typeof v === 'string' ? v : '';
+                return id && JUMP_SECTION_LABELS[id] ? JUMP_SECTION_LABELS[id] : 'Choose section…';
+              },
+            }}
+          >
+            <MenuItem value="" disabled>
+              Choose section…
+            </MenuItem>
+            <ListSubheader disableSticky sx={{ typography: 'overline', color: 'text.secondary', lineHeight: 2 }}>
+              Operate
+            </ListSubheader>
+            <MenuItem value="panel-cross-chain-intent">Cross-chain intents</MenuItem>
+            <MenuItem value="panel-circuits">Midnight contract actions</MenuItem>
+            <MenuItem value="panel-tx-log">Transaction log</MenuItem>
+            <ListSubheader disableSticky sx={{ typography: 'overline', color: 'text.secondary', lineHeight: 2 }}>
+              Wallets & deploy
+            </ListSubheader>
+            <MenuItem value="panel-demo-wallets">Test wallet demo</MenuItem>
+            <MenuItem value="panel-midnight-deploy">Midnight deploy & Lace</MenuItem>
+            <MenuItem value="panel-evm">EVM wallet</MenuItem>
+            <MenuItem value="panel-cardano">Cardano wallet</MenuItem>
+            <ListSubheader disableSticky sx={{ typography: 'overline', color: 'text.secondary', lineHeight: 2 }}>
+              Observe
+            </ListSubheader>
+            <MenuItem value="panel-bridge-state">On-chain bridge state</MenuItem>
+          </TextField>
+          <Button size="small" variant="text" onClick={openRelayerHealth} sx={{ alignSelf: { xs: 'flex-start', sm: 'center' } }}>
+            Open relayer health
           </Button>
         </Stack>
 
-        <Accordion defaultExpanded>
+        <Accordion>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography fontWeight={600}>1. Product scope (SRS §1–2)</Typography>
+            <Typography variant="subtitle1" component="span">
+              1. Product scope (SRS §1–2)
+            </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Typography variant="body2" paragraph>
@@ -110,9 +146,11 @@ export const FullDemoRundown: React.FC = () => {
           </AccordionDetails>
         </Accordion>
 
-        <Accordion defaultExpanded>
+        <Accordion>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography fontWeight={600}>2. End-to-end workflows (blueprint)</Typography>
+            <Typography variant="subtitle1" component="span">
+              2. End-to-end workflows (blueprint)
+            </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Typography variant="subtitle2" gutterBottom>
@@ -153,7 +191,9 @@ export const FullDemoRundown: React.FC = () => {
 
         <Accordion>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography fontWeight={600}>3. What to run locally (stack)</Typography>
+            <Typography variant="subtitle1" component="span">
+              3. What to run locally (stack)
+            </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Typography variant="body2" component="div" sx={{ mb: 1 }}>
@@ -184,9 +224,11 @@ export const FullDemoRundown: React.FC = () => {
           </AccordionDetails>
         </Accordion>
 
-        <Accordion defaultExpanded>
+        <Accordion>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography fontWeight={600}>4. UI steps mapped to SRS (happy path)</Typography>
+            <Typography variant="subtitle1" component="span">
+              4. UI steps mapped to SRS (happy path)
+            </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Table size="small">
@@ -266,7 +308,9 @@ export const FullDemoRundown: React.FC = () => {
 
         <Accordion>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography fontWeight={600}>5. Non-functional targets (SRS §4.1 — informational)</Typography>
+            <Typography variant="subtitle1" component="span">
+              5. Non-functional targets (SRS §4.1 — informational)
+            </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Table size="small">
@@ -300,7 +344,9 @@ export const FullDemoRundown: React.FC = () => {
 
         <Accordion>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography fontWeight={600}>6. Blueprint component checklist</Typography>
+            <Typography variant="subtitle1" component="span">
+              6. Blueprint component checklist
+            </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Box component="ul" sx={{ pl: 2 }}>
