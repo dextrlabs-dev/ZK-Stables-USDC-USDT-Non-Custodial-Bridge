@@ -1,12 +1,11 @@
-import React, { lazy, Suspense } from 'react';
+import React from 'react';
 import ReactDOM from 'react-dom/client';
+import './tailwind.css';
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import { theme } from './config/theme.js';
 import { CrossChainWalletProvider } from './contexts/CrossChainWalletContext.js';
 import { EvmWagmiProvider } from './providers/EvmWagmiProvider.js';
-import { MidnightLazyFallback } from './components/MidnightLazyFallback.js';
-
-const MainApp = lazy(() => import('./MainApp.js'));
+import App from './App.js';
 
 export function mount(): void {
   const el = document.getElementById('root');
@@ -19,9 +18,7 @@ export function mount(): void {
         <CssBaseline />
         <EvmWagmiProvider>
           <CrossChainWalletProvider>
-            <Suspense fallback={<MidnightLazyFallback />}>
-              <MainApp />
-            </Suspense>
+            <App />
           </CrossChainWalletProvider>
         </EvmWagmiProvider>
       </ThemeProvider>

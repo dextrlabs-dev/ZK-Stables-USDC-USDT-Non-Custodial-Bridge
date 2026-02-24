@@ -5,10 +5,11 @@
   "workspaces": [
     "contract",
     "local-cli",
+    "zk-stables-relayer",
     "zk-stables-ui"
   ],
   "scripts": {
-    "postinstall": "patch-package --patch-dir local-cli/patches",
+    "postinstall": "patch-package --patch-dir local-cli/patches && node scripts/postinstall-libsodium.mjs",
     "contract:compact": "npm run compact -w @zk-stables/midnight-contract",
     "contract:build": "npm run build -w @zk-stables/midnight-contract",
     "run-genesis": "npm run run-genesis -w @zk-stables/local-cli",

@@ -118,7 +118,7 @@ export type RelayerJob = {
   createdAt: string;
   updatedAt: string;
   error?: string;
-  /** Synthetic lock id until on-chain events are wired. */
+  /** Anchor id: `evm:tx:logIndex` / `cardano:tx:out` from on-chain intents, or `offchain:…` for API-only. */
   lockRef: string;
   /** merkle-inclusion-v1 = chain-data Merkle proof; stub-sha256-v1 = dev digest only. */
   proofBundle?: {

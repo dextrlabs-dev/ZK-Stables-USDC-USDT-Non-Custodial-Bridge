@@ -15,6 +15,8 @@
    cd zk-stables-relayer && npm start
    ```
 
+   Optional: `RELAYER_ENABLE_DEMO_WALLETS=true` so the bridge UI can load **`GET /v1/demo/wallets`** (server mnemonics / derived EVM keys in dev).
+
    Check: `curl -s http://127.0.0.1:8787/v1/health/chains | jq .evm`
 
 3. **Frontend** — `zk-stables-ui` uses `VITE_ETH_LOCALHOST_RPC_URL` (default `http://127.0.0.1:8545`). In the **Ethereum** card, connect MetaMask and **Switch chain → Localhost (31337)**. Add the network manually if needed (RPC `http://127.0.0.1:8545`, chain id `31337`).

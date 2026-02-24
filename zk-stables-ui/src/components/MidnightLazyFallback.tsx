@@ -9,7 +9,7 @@ const LINES = [
 ] as const;
 
 /**
- * Shown while the lazy `MainApp` chunk (Midnight + contract) loads.
+ * Shown while a lazy-loaded Midnight chunk loads (if used).
  * Rotates status text so the wait feels informed, not stuck.
  */
 export function MidnightLazyFallback(): React.ReactElement {

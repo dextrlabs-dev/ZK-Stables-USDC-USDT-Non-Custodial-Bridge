@@ -5,6 +5,8 @@ import pino from 'pino';
 import type { BurnIntent, LockIntent } from './types.js';
 import { enqueueLockIntent } from './pipeline/runJob.js';
 import { getJob, listJobs } from './store.js';
+import { buildDemoWallets } from './demo/buildDemoWallets.js';
+import { serializeRelayerJob } from './jobSerialization.js';
 import { evmRpcOk, midnightIndexerPing } from './adapters/chainHealth.js';
 import { blockfrostLatestBlock } from './adapters/cardanoBlockfrost.js';
 import { yaciLatestBlock } from './adapters/cardanoYaci.js';
@@ -23,8 +25,11 @@ import {
   mergeRelayerBridgeIntoConnected,
   relayerBridgeSnapshot,
 } from './config/bridgeRecipients.js';
+import { isMidnightBridgeEnabled, warmupMidnightRelayer } from './midnight/service.js';
+import { assertRelayerStartupConfig } from './config/srsCompliance.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+assertRelayerStartupConfig(logger);
 const port = Number(process.env.RELAYER_PORT ?? 8787);
 
 {
@@ -102,6 +107,14 @@ app.get('/v1/health/chains', async (c) => {
 
 app.get('/v1/bridge/recipients', (c) => c.json(relayerBridgeSnapshot()));
 
+/** Demo wallets (mnemonics + derived EVM keys) — local integration only. */
+app.get('/v1/demo/wallets', (c) => {
+  if (process.env.RELAYER_ENABLE_DEMO_WALLETS !== 'true') {
+    return c.json({ error: 'Demo wallets disabled. Set RELAYER_ENABLE_DEMO_WALLETS=true on the relayer.' }, 404);
+  }
+  return c.json(buildDemoWallets());
+});
+
 app.post('/v1/intents/lock', async (c) => {
   let body: LockIntent;
   try {
@@ -128,7 +141,7 @@ app.post('/v1/intents/lock', async (c) => {
 
   const job = await enqueueLockIntent(logger, body);
   if (!job) return c.json({ error: 'duplicate or skipped' }, 409);
-  return c.json({ jobId: job.id, job }, 202);
+  return c.json({ jobId: job.id, job: serializeRelayerJob(job) }, 202);
 });
 
 app.post('/v1/intents/burn', async (c) => {
@@ -161,23 +174,31 @@ app.post('/v1/intents/burn', async (c) => {
 
   const job = await enqueueLockIntent(logger, body);
   if (!job) return c.json({ error: 'duplicate or skipped' }, 409);
-  return c.json({ jobId: job.id, job }, 202);
+  return c.json({ jobId: job.id, job: serializeRelayerJob(job) }, 202);
 });
 
-app.get('/v1/jobs', (c) => c.json({ jobs: listJobs() }));
+app.get('/v1/jobs', (c) => c.json({ jobs: listJobs().map(serializeRelayerJob) }));
 
 app.get('/v1/jobs/:id', (c) => {
   const j = getJob(c.req.param('id'));
   if (!j) return c.json({ error: 'not found' }, 404);
-  return c.json(j);
+  return c.json(serializeRelayerJob(j));
 });
 
 logger.info({ port }, 'zk-stables-relayer listening');
 
-// Phase 2: optional watcher (polls when configured).
+if (isMidnightBridgeEnabled()) {
+  void warmupMidnightRelayer(logger)
+    .then((h) => {
+      if (h) logger.info({ contract: h.contractAddress }, 'Midnight relayer ready');
+      else logger.warn('RELAYER_MIDNIGHT_ENABLED but Midnight relayer did not initialize (check BIP39_MNEMONIC / contract address / deploy flag)');
+    })
+    .catch((e) => logger.error({ err: e }, 'Midnight relayer warmup failed'));
+}
+
+// EVM + Cardano watchers (required when RELAYER_SRS_STRICT — env must list addresses/tokens; see docs/SRS_RELAYER_REQUIREMENTS.md).
 void runEvmLockWatcher(logger);
 void runEvmBurnWatcher(logger);
-// Phase 3: optional scaffold watcher (disabled by default).
 void runCardanoLockWatcher(logger);
 
 serve({ fetch: app.fetch, port });

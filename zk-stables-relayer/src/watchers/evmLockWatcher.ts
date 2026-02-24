@@ -20,6 +20,8 @@ export async function runEvmLockWatcher(logger: Logger): Promise<void> {
 
   const pollMs = Number(process.env.RELAYER_EVM_POLL_MS ?? 2000);
   const confirmations = BigInt(process.env.RELAYER_EVM_CONFIRMATIONS ?? 1);
+  /** Default `midnight` so EVM locks feed the Midnight mint pipeline; override e.g. `evm` for same-chain tests. */
+  const destChain = (process.env.RELAYER_EVM_LOCK_DEST_CHAIN ?? 'midnight').trim() || 'midnight';
 
   let cursor = BigInt(process.env.RELAYER_EVM_FROM_BLOCK ?? 0);
 
@@ -38,7 +40,7 @@ export async function runEvmLockWatcher(logger: Logger): Promise<void> {
           const intent = {
             operation: 'LOCK' as const,
             sourceChain: 'evm' as const,
-            destinationChain: 'evm',
+            destinationChain: destChain,
             asset: 'USDC' as const,
             assetKind: 0,
             amount: e.amount.toString(),

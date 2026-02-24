@@ -35,8 +35,8 @@ export default defineConfig(({ mode }) => ({
         name: 'ZK-Stables Bridge',
         short_name: 'ZK-Stables',
         description: 'Midnight + EVM/Cardano bridge demo',
-        theme_color: '#121212',
-        background_color: '#121212',
+        theme_color: '#f8fafc',
+        background_color: '#f8fafc',
         display: 'standalone',
         start_url: '/',
         icons: [],
@@ -95,7 +95,7 @@ export default defineConfig(({ mode }) => ({
     esbuildOptions: {
       define: { global: 'globalThis' },
     },
-    // Pre-bundle the shell so the first dev request is fast; Midnight/WASM still lazy via MainApp.
+    // Pre-bundle the shell so the first dev request is fast.
     include: [
       'buffer',
       'react',
@@ -131,17 +131,8 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     fs: { allow: ['..'] },
-    // Warm shell only; MainApp triggers a second transform when the browser requests it.
-    // Pre-transform heavy client modules so the first browser load pays less cold-compile latency (dev only).
     warmup: {
-      clientFiles: [
-        './index.html',
-        './src/main.tsx',
-        './src/globals.ts',
-        './src/bootstrap.tsx',
-        './src/MainApp.tsx',
-        './src/contexts/ZkStablesContext.tsx',
-      ],
+      clientFiles: ['./index.html', './src/main.tsx', './src/globals.ts', './src/bootstrap.tsx', './src/App.tsx'],
     },
   },
 }));

@@ -14,9 +14,28 @@ export function relayerBridgeCardanoRecipient(): string | undefined {
   return trimEnv('RELAYER_BRIDGE_CARDANO_RECIPIENT');
 }
 
+/**
+ * Midnight addresses are bech32 (`mn_addr…` + `1` + data). Placeholder strings like
+ * `mn_addr_placeholder_…` break Mesh/CSL WASM decoders with Base58Error / UnknownSymbol.
+ */
+function isLikelyMidnightBech32(addr: string): boolean {
+  const t = addr.trim();
+  if (!t.startsWith('mn_addr')) return false;
+  const sep = t.indexOf('1');
+  if (sep < 0) return false;
+  const data = t.slice(sep + 1);
+  if (data.length < 6) return false;
+  if (data.includes('_')) return false;
+  return true;
+}
+
 /** Midnight destination (shielded/unshielded bech32) when `RELAYER_CARDANO_RECIPIENT_STUB` is unset. */
 export function relayerBridgeMidnightRecipient(): string | undefined {
-  return trimEnv('RELAYER_BRIDGE_MIDNIGHT_RECIPIENT');
+  const raw = trimEnv('RELAYER_BRIDGE_MIDNIGHT_RECIPIENT');
+  if (!raw) return undefined;
+  if (/placeholder/i.test(raw)) return undefined;
+  if (!isLikelyMidnightBech32(raw)) return undefined;
+  return raw;
 }
 
 export function relayerBridgeSnapshot(): {

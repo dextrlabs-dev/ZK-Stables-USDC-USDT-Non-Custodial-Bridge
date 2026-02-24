@@ -29,24 +29,43 @@ import {
   resolveYaciBaseUrl,
 } from '../adapters/cardanoIndexer.js';
 import type { Logger } from 'pino';
+import { isMidnightBridgeEnabled, runMidnightMintPipeline } from '../midnight/service.js';
+import { parseDecimalAmountToUnits } from '../adapters/amount.js';
+import {
+  cardanoPayoutToRecipient,
+  cardanoRecipientMatchesNetwork,
+  ensureCardanoBridgeWallet,
+  isCardanoBridgeEnabled,
+  looksLikeCardanoAddress,
+} from '../adapters/cardanoPayout.js';
+import { buildLockRefFromIntent } from './lockRef.js';
 
 function destLabel(intent: BridgeIntent): string {
   return (intent.destinationChain ?? '').toLowerCase();
 }
 
+function looksLikeEvmAddress(addr: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/u.test(addr.trim());
+}
+
+function relayerCardanoNetworkId(): 0 | 1 {
+  const n = Number(process.env.RELAYER_CARDANO_NETWORK_ID ?? process.env.CARDANO_NETWORK_ID ?? 0);
+  return n === 1 ? 1 : 0;
+}
+
 function destinationHint(intent: BridgeIntent, digest: string): string {
   const dest = destLabel(intent);
   if (dest.includes('midnight')) {
-    return `Midnight: verify proof digest ${digest.slice(0, 16)}… then run mintWrappedUnshielded / contract flow with recipient ${intent.recipient} (shielded UserAddress).`;
+    return `Midnight: proof digest ${digest.slice(0, 16)}… → recipient ${intent.recipient}. When RELAYER_MIDNIGHT_ENABLED=true, the relayer runs proveHolder + mintWrappedUnshielded on the zk-stables contract.`;
   }
   if (dest.includes('eth') || dest.includes('evm')) {
     if (intent.operation === 'BURN') {
-      return `EVM: burn proven (merkle-inclusion-v1); underlying unlocked to ${intent.recipient}.`;
+      return `EVM: burn proven (merkle-inclusion-v1); underlying unlocked to ${intent.recipient} when RELAYER_EVM_POOL_LOCK and recipient is 0x-prefixed.`;
     }
-    return `EVM destination: verifier contract should accept proof bundle and mint ERC-20 to ${intent.recipient}.`;
+    return `EVM destination: ZkStablesBridgeMint.mintWrapped to ${intent.recipient} when RELAYER_EVM_BRIDGE_MINT + RELAYER_EVM_WRAPPED_TOKEN + RELAYER_EVM_PRIVATE_KEY are set (nonce from proof digest if omitted on intent).`;
   }
   if (dest.includes('cardano')) {
-    return `Cardano destination: mint native/Plutus token to address derived from recipient field.`;
+    return `Cardano destination: operator payout to ${intent.recipient} when RELAYER_CARDANO_BRIDGE_ENABLED and a funded mnemonic + Yaci/Blockfrost are configured (lovelace/asset per env).`;
   }
   return `Destination ${intent.destinationChain ?? 'unknown'}: submit proofBundle to chain verifier, then mint/release per bridge rules.`;
 }
@@ -64,7 +83,7 @@ export async function enqueueLockIntent(logger: Logger, intent: BridgeIntent): P
   }
 
   const id = `job_${Date.now()}_${randomBytes(4).toString('hex')}`;
-  const lockRef = `synthetic:${intent.sourceChain}:${randomBytes(8).toString('hex')}`;
+  const lockRef = buildLockRefFromIntent(intent);
   const now = new Date().toISOString();
   const job: RelayerJob = {
     id,
@@ -178,11 +197,13 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
     });
     logger.info({ id, digest: proofBundle.digest, depositCommitmentHex }, 'destination_handoff');
 
-    // FR-3.1.5: burn → prove → unlock on source pool (EVM).
+    // FR-3.1.5: burn → prove → unlock on source pool (EVM) when recipient is an EVM address.
+    let evmBurnUnlockDone = false;
     if (
       job.intent.operation === 'BURN' &&
       job.intent.source?.evm &&
       proofBundle.inclusion &&
+      looksLikeEvmAddress(job.intent.recipient) &&
       process.env.RELAYER_EVM_POOL_LOCK &&
       process.env.RELAYER_EVM_UNDERLYING_TOKEN &&
       process.env.RELAYER_EVM_PRIVATE_KEY
@@ -192,16 +213,19 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
         const pool = process.env.RELAYER_EVM_POOL_LOCK as `0x${string}`;
         const underlying = process.env.RELAYER_EVM_UNDERLYING_TOKEN as `0x${string}`;
         const wrapped = (process.env.RELAYER_EVM_WRAPPED_TOKEN ?? job.intent.source.evm.wrappedTokenAddress) as `0x${string}`;
+        const decimals = Number(process.env.RELAYER_EVM_TOKEN_DECIMALS ?? 6);
+        const amountUnits = parseDecimalAmountToUnits(job.intent.amount, decimals);
         const { txHash } = await evmUnlockWithInclusionProof({
           rpcUrl,
           privateKey: pk,
           poolLock: pool,
           underlyingToken: underlying,
           recipient: job.intent.recipient as `0x${string}`,
-          amount: BigInt(job.intent.amount),
+          amount: amountUnits,
           wrappedEmitter: wrapped,
           proof: proofBundle.inclusion,
         });
+        evmBurnUnlockDone = true;
         if (keys.evm) markEvmEventProcessed(keys.evm);
         patchJob(id, { destinationHint: `${hint}\nUnlock tx: ${txHash}` });
       } catch (e) {
@@ -210,33 +234,112 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       }
     }
 
-    // LOCK → mint on EVM dest (demo).
+    // BURN → Cardano recipient: settlement payout (stub / Cardano-sourced burn without EVM unlock).
     if (
-      job.intent.operation === 'LOCK' &&
-      (job.intent.destinationChain ?? '').toLowerCase().includes('evm') &&
-      job.intent.source?.evm?.nonce
+      job.intent.operation === 'BURN' &&
+      !evmBurnUnlockDone &&
+      looksLikeCardanoAddress(job.intent.recipient) &&
+      cardanoRecipientMatchesNetwork(job.intent.recipient, relayerCardanoNetworkId()) &&
+      isCardanoBridgeEnabled()
     ) {
+      const bridge = await ensureCardanoBridgeWallet(logger);
+      if (bridge) {
+        try {
+          const lovelace = BigInt(process.env.RELAYER_CARDANO_PAYOUT_LOVELACE ?? '3000000');
+          const assetUnit = process.env.RELAYER_CARDANO_ASSET_UNIT?.trim();
+          const assetDecimals = Number(process.env.RELAYER_CARDANO_ASSET_DECIMALS ?? 6);
+          const assetQty =
+            assetUnit && assetUnit.length > 0
+              ? parseDecimalAmountToUnits(job.intent.amount, assetDecimals)
+              : undefined;
+          const { txHash } = await cardanoPayoutToRecipient({
+            recipientBech32: job.intent.recipient,
+            lovelace,
+            ...(assetUnit && assetQty !== undefined ? { assetUnit, assetQuantity: assetQty } : {}),
+            logger,
+          });
+          patchJob(id, { destinationHint: `${hint}\nCardano unlock/payout tx: ${txHash}` });
+        } catch (e) {
+          logger.error({ err: e, id }, 'cardano BURN payout failed');
+          throw e;
+        }
+      }
+    }
+
+    // LOCK → mint on EVM dest (demo): nonce defaults to proof digest (bytes32).
+    if (job.intent.operation === 'LOCK' && destLabel(job.intent).includes('evm') && looksLikeEvmAddress(job.intent.recipient)) {
       const pk = process.env.RELAYER_EVM_PRIVATE_KEY as `0x${string}` | undefined;
       const bridgeMint = process.env.RELAYER_EVM_BRIDGE_MINT as `0x${string}` | undefined;
       const wrapped = process.env.RELAYER_EVM_WRAPPED_TOKEN as `0x${string}` | undefined;
-      const nonce = job.intent.source.evm.nonce as `0x${string}`;
       if (pk && bridgeMint && wrapped && proofBundle.publicInputsHex) {
         try {
+          const digestHex = proofBundle.digest.length >= 64 ? proofBundle.digest.slice(0, 64) : proofBundle.digest.padStart(64, '0');
+          const nonce = (job.intent.source?.evm?.nonce as `0x${string}` | undefined) ?? (`0x${digestHex}` as `0x${string}`);
+          const decimals = Number(process.env.RELAYER_EVM_TOKEN_DECIMALS ?? 6);
+          const amountUnits = parseDecimalAmountToUnits(job.intent.amount, decimals);
           const { txHash } = await evmMintWrapped({
             rpcUrl,
             privateKey: pk,
             bridgeMint,
             wrappedToken: wrapped,
             recipient: job.intent.recipient as `0x${string}`,
-            amount: BigInt(job.intent.amount),
+            amount: amountUnits,
             nonce,
             proofBytes: '0x',
             publicInputsHash: (`0x${proofBundle.publicInputsHex}`) as `0x${string}`,
           });
           patchJob(id, { destinationHint: `${hint}\nAuto-mint tx: ${txHash}` });
         } catch (e) {
-          logger.warn({ err: e, id }, 'auto-mint failed');
+          logger.error({ err: e, id }, 'EVM auto-mint failed');
+          throw e;
         }
+      }
+    }
+
+    // LOCK → Cardano dest: operator payout to bech32 recipient.
+    if (
+      job.intent.operation === 'LOCK' &&
+      destLabel(job.intent).includes('cardano') &&
+      looksLikeCardanoAddress(job.intent.recipient) &&
+      cardanoRecipientMatchesNetwork(job.intent.recipient, relayerCardanoNetworkId()) &&
+      isCardanoBridgeEnabled()
+    ) {
+      const bridge = await ensureCardanoBridgeWallet(logger);
+      if (bridge) {
+        try {
+          const lovelace = BigInt(process.env.RELAYER_CARDANO_PAYOUT_LOVELACE ?? '3000000');
+          const assetUnit = process.env.RELAYER_CARDANO_ASSET_UNIT?.trim();
+          const assetDecimals = Number(process.env.RELAYER_CARDANO_ASSET_DECIMALS ?? 6);
+          const assetQty =
+            assetUnit && assetUnit.length > 0
+              ? parseDecimalAmountToUnits(job.intent.amount, assetDecimals)
+              : undefined;
+          const { txHash } = await cardanoPayoutToRecipient({
+            recipientBech32: job.intent.recipient,
+            lovelace,
+            ...(assetUnit && assetQty !== undefined ? { assetUnit, assetQuantity: assetQty } : {}),
+            logger,
+          });
+          patchJob(id, { destinationHint: `${hint}\nCardano payout tx: ${txHash}` });
+        } catch (e) {
+          logger.error({ err: e, id }, 'cardano LOCK payout failed');
+          throw e;
+        }
+      }
+    }
+
+    // LOCK → Midnight: relayer wallet runs proveHolder + mintWrappedUnshielded (same as local-cli demo sequence).
+    if (job.intent.operation === 'LOCK' && destLabel(job.intent).includes('midnight') && isMidnightBridgeEnabled()) {
+      try {
+        const extra = await runMidnightMintPipeline(logger, job.intent.recipient);
+        const j = getJob(id);
+        const prev = j?.destinationHint ?? hint;
+        patchJob(id, {
+          destinationHint: extra ? `${prev}\n\n--- Midnight (relayer) ---\n${extra}` : prev,
+        });
+      } catch (e) {
+        logger.error({ err: e, id }, 'midnight mint pipeline failed');
+        throw e;
       }
     }
 

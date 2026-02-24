@@ -4,7 +4,7 @@ Vite + React + MUI dApp modeled on [example-zkloan](https://github.com/midnightn
 
 The repo PDFs (SRS + architecture blueprint) describe **EVM and Cardano** lock/mint/relayer/ZK flows. This UI adds **wagmi** (injected EVM wallet + chain switch) and **CIP-30** Cardano wallet connect, plus an **SRS-style lock intent** form (asset, amount, source/destination, recipient). It does **not** deploy Ethereum pool contracts, Plutus validators, or relayers; those are integration points for future work. Optional env: `VITE_ETH_SEPOLIA_RPC_URL`, `VITE_ETH_MAINNET_RPC_URL`, `VITE_ETH_LOCALHOST_RPC_URL`, `VITE_EVM_LOCK_CONTRACT` (placeholder for a future lock contract address).
 
-Stack matches `local-cli`: **ledger-v8**, **midnight-js 4.0.2**, **compact-js 2.5.0** / **compact-runtime 0.15.0**.
+Stack matches `local-cli`: **ledger-v8**, **midnight-js 4.0.2**, **compact-js 2.5.0** / **compact-runtime 0.15.0**. The main bridge shell uses **Tailwind CSS** (utilities only; preflight off) plus **MUI** for developer panels and dialogs.
 
 ## Prerequisites
 
@@ -47,6 +47,10 @@ cd ../zk-stables-relayer && npm install && npm start
 ```
 
 Default `http://127.0.0.1:8787`. Set `VITE_RELAYER_URL` if the relayer runs elsewhere. The service implements the architecture **pipeline** (simulated finality → stub ZK digest → destination hint); it does not deploy EVM/Cardano pool contracts or submit Midnight txs. See `../zk-stables-relayer/README.md`.
+
+### Bridge UI + server demo wallets
+
+The main screen is a **compact bridge card** (mint/burn flows, 3×3 chains, USDC/USDT). It loads **`GET /v1/demo/wallets`** when the relayer has **`RELAYER_ENABLE_DEMO_WALLETS=true`**, showing server-derived mnemonics/keys (dev only). If that endpoint is disabled, the UI falls back to built-in **public** Anvil addresses and static Cardano/Midnight placeholders from `src/lib/bridgeDemoFallback.ts`.
 
 ### Test wallet demo (all chains)
 

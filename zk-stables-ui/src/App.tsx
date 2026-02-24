@@ -1,5 +1,9 @@
 import React, { useEffect } from 'react';
-import { Box, Container, Link, Stack, Typography } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { Accordion, AccordionDetails, AccordionSummary, Box, Container, Link, Stack, Typography } from '@mui/material';
+import pino from 'pino';
+import { ZkStablesProvider } from './contexts/ZkStablesContext.js';
+import { BridgeCard } from './components/BridgeCard/BridgeCard.js';
 import { BridgeStatusCard } from './components/BridgeStatusCard.js';
 import { CardanoWalletCard } from './components/CardanoWalletCard.js';
 import { CircuitActions } from './components/CircuitActions.js';
@@ -10,54 +14,82 @@ import { EvmWalletCard } from './components/EvmWalletCard.js';
 import { FullDemoRundown } from './components/FullDemoRundown.js';
 import { TxLog } from './components/TxLog.js';
 
+/** Logger for Midnight dev tools only; main bridge flow does not use ZkStablesProvider. */
+const devMidnightLogger = pino({ level: import.meta.env.DEV ? 'info' : 'silent' });
+
 const App: React.FC = () => {
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     // eslint-disable-next-line no-console
-    console.info('%cZK-Stables %cdeveloper UI', 'color:#58a6ff;font-weight:700', 'color:#8b949e');
+    console.info('%cZK-Stables', 'color:#0f766e;font-weight:700');
   }, []);
 
   return (
-    <Box sx={{ py: 4, minHeight: '100vh', bgcolor: 'background.default' }}>
-      <Container maxWidth="md">
-        <Stack spacing={3}>
-          <Box id="app-intro" sx={{ maxWidth: '65ch' }}>
-            <Typography variant="h4" component="h1" gutterBottom>
-              ZK-Stables bridge
-            </Typography>
-            <Typography variant="body1" color="text.secondary" sx={{ mb: 0 }}>
-              Developer demo for a USDC/USDT bridge across <strong>Midnight</strong> (Compact), <strong>EVM</strong>, and{' '}
-              <strong>Cardano</strong>, in the spirit of the{' '}
-              <Link href="https://github.com/midnightntwrk/example-zkloan" target="_blank" rel="noreferrer">
-                example-zkloan
+    <div className="min-h-screen bg-slate-50 pb-16 pt-10 font-sans antialiased text-slate-900 md:pb-24 md:pt-14">
+      <Container maxWidth="sm" className="!px-4">
+        <div className="mx-auto flex max-w-lg flex-col items-center gap-10">
+          <header className="max-w-md text-center">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Cross-chain</p>
+            <h1 className="mt-2 text-balance text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
+              Bridge stablecoins without giving up custody
+            </h1>
+            <p className="mt-3 text-pretty text-sm leading-relaxed text-slate-600">
+              Move <span className="font-medium text-slate-800">USDC</span> and <span className="font-medium text-slate-800">USDT</span>{' '}
+              between <span className="font-medium text-slate-800">EVM</span>, <span className="font-medium text-slate-800">Cardano</span>, and{' '}
+              <span className="font-medium text-slate-800">Midnight</span>. Built on the{' '}
+              <Link href="https://github.com/midnightntwrk/example-zkloan" target="_blank" rel="noreferrer" className="font-medium text-teal-800 underline-offset-2 hover:underline">
+                zkloan-style
               </Link>{' '}
-              flow. <strong>1.</strong> Submit a lock or burn in <strong>Cross-chain intents</strong>.{' '}
-              <strong>2.</strong> Connect wallets and deploy Midnight as needed. <strong>3.</strong> Use the{' '}
-              <strong>Demo rundown</strong> at the bottom for spec-aligned background (lock → prove → mint; burn → prove →
-              unlock).
-            </Typography>
-            <Typography variant="body2" color="warning.main" sx={{ mt: 1.5 }}>
-              For production: do not paste operator or holder private keys in the browser — this UI is for local testing only.
-            </Typography>
-          </Box>
-          <CrossChainIntentPanel />
-          <DemoWalletsPanel />
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ alignItems: 'stretch' }}>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <EvmWalletCard />
-            </Box>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <CardanoWalletCard />
-            </Box>
-          </Stack>
-          <DeployJoinPanel />
-          <BridgeStatusCard />
-          <CircuitActions />
-          <TxLog />
-          <FullDemoRundown />
-        </Stack>
+              flow and <strong>zk-stables-relayer</strong>.
+            </p>
+            <p className="mt-4 text-xs leading-relaxed text-amber-800/90">
+              Local demo — do not use operator keys or demo mnemonics with real funds.
+            </p>
+          </header>
+
+          <BridgeCard />
+
+          <Accordion
+            defaultExpanded={import.meta.env.DEV}
+            disableGutters
+            elevation={0}
+            className="w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm !before:hidden"
+          >
+            <AccordionSummary expandIcon={<ExpandMoreIcon className="text-slate-500" />} className="min-h-14 px-4 hover:bg-slate-50/80">
+              <div>
+                <Typography component="span" className="font-semibold text-slate-900">
+                  Developer tools
+                </Typography>
+                <Typography variant="caption" component="span" className="ml-2 text-slate-500">
+                  Deploy, wallets, raw intents, circuits
+                </Typography>
+              </div>
+            </AccordionSummary>
+            <AccordionDetails className="border-t border-slate-100 px-4 pb-6 pt-2">
+              <ZkStablesProvider logger={devMidnightLogger}>
+                <Stack spacing={3}>
+                  <CrossChainIntentPanel />
+                  <DemoWalletsPanel />
+                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ alignItems: 'stretch' }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <EvmWalletCard />
+                    </Box>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <CardanoWalletCard />
+                    </Box>
+                  </Stack>
+                  <DeployJoinPanel />
+                  <BridgeStatusCard />
+                  <CircuitActions />
+                  <TxLog />
+                  <FullDemoRundown />
+                </Stack>
+              </ZkStablesProvider>
+            </AccordionDetails>
+          </Accordion>
+        </div>
       </Container>
-    </Box>
+    </div>
   );
 };
 

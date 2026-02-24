@@ -11,6 +11,12 @@ interface ImportMetaEnv {
   readonly VITE_ENABLE_DEMO_WALLETS?: string;
   /** Base URL of zk-stables-relayer (default http://127.0.0.1:8787). */
   readonly VITE_RELAYER_URL?: string;
+  /** Mock underlying ERC-20 from `deploy-anvil.js` (`usdc` / `usdt`). */
+  readonly VITE_DEMO_USDC_ADDRESS?: string;
+  readonly VITE_DEMO_USDT_ADDRESS?: string;
+  /** Wrapped bridge tokens (`wUSDC` / `wUSDT` from deploy) for balance display. */
+  readonly VITE_DEMO_WUSDC_ADDRESS?: string;
+  readonly VITE_DEMO_WUSDT_ADDRESS?: string;
 }
 
 interface ImportMeta {

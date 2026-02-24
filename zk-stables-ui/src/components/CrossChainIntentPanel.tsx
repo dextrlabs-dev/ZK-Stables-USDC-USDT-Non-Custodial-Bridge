@@ -42,6 +42,7 @@ type RelayerJob = {
   depositCommitmentHex?: string;
   error?: string;
   intent: unknown;
+  ui?: { phaseLabel: string; phaseIndex: number; phaseCount: number };
 };
 
 const RELAYER_STUB_WARN_DISMISS_KEY = 'zk-stables-ui-dismiss-relayer-stub-warn';

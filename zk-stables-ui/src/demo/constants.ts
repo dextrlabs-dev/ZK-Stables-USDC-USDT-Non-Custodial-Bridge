@@ -15,9 +15,13 @@ export const DEMO_MIDNIGHT_SHIELDED =
 export const DEMO_CARDANO_USED_HEX =
   '005868020a9edf2045716fa575bb82e694f23a785bdfddb6db2cbf750000000000000000000000000';
 
-/** Bech32-style label for demo Cardano row (UI only; not validated on-chain). */
+/** Testnet bech32 (matches Yaci / RELAYER_CARDANO_NETWORK_ID=0). Mainnet addr1… breaks Mesh tx build with preview. */
 export const DEMO_CARDANO_BECH32_PREVIEW =
-  'addr1qxy2yfxgk2yhexmp782fgpvdd3hhj3xtst80eq6ydr9hucvfxjfp3z002gt3k80vtcg9demux';
+  'addr_test1qq8ac7qqy0vtulyl7wntmsxc6wex80gvcyjy33qffrhm7sh927ysx5sftuw0dlft05dz3c7revpf7jx0xnlcjz3g69mqkt5dmn';
+
+/** Second demo Cardano address for bridge “destination” when relayer demo API is off. */
+export const DEMO_CARDANO_BECH32_DEST =
+  'addr_test1qq8ac7qqy0vtulyl7wntmsxc6wex80gvcyjy33qffrhm7sh927ysx5sftuw0dlft05dz3c7revpf7jx0xnlcjz3g69mqkt5dmn';
 
 export function demoWalletsEnabled(): boolean {
   if (import.meta.env.VITE_ENABLE_DEMO_WALLETS === 'false') return false;
