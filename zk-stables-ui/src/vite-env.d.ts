@@ -17,6 +17,16 @@ interface ImportMetaEnv {
   /** Wrapped bridge tokens (`wUSDC` / `wUSDT` from deploy) for balance display. */
   readonly VITE_DEMO_WUSDC_ADDRESS?: string;
   readonly VITE_DEMO_WUSDT_ADDRESS?: string;
+  /**
+   * Yaci Store Blockfrost-compatible base (e.g. `http://127.0.0.1:8080/api/v1`).
+   * In dev, `/yaci-store` is proxied by Vite to avoid CORS — set to that path or full URL.
+   */
+  readonly VITE_YACI_STORE_URL?: string;
+  /** Full native asset unit hex (policyId + assetName) for Cardano wUSDC balance via Yaci. */
+  readonly VITE_CARDANO_WUSDC_UNIT?: string;
+  readonly VITE_CARDANO_WUSDT_UNIT?: string;
+  /** Decimals for native Cardano bridge token display (default 6). */
+  readonly VITE_CARDANO_NATIVE_DECIMALS?: string;
 }
 
 interface ImportMeta {

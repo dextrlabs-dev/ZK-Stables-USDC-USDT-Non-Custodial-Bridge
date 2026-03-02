@@ -14,7 +14,7 @@ import { EvmWalletCard } from './components/EvmWalletCard.js';
 import { FullDemoRundown } from './components/FullDemoRundown.js';
 import { TxLog } from './components/TxLog.js';
 
-/** Logger for Midnight dev tools only; main bridge flow does not use ZkStablesProvider. */
+/** Logger for Midnight (bridge card ledger + developer tools). */
 const devMidnightLogger = pino({ level: import.meta.env.DEV ? 'info' : 'silent' });
 
 const App: React.FC = () => {
@@ -47,26 +47,26 @@ const App: React.FC = () => {
             </p>
           </header>
 
-          <BridgeCard />
+          <ZkStablesProvider logger={devMidnightLogger}>
+            <BridgeCard />
 
-          <Accordion
-            defaultExpanded={import.meta.env.DEV}
-            disableGutters
-            elevation={0}
-            className="w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm !before:hidden"
-          >
-            <AccordionSummary expandIcon={<ExpandMoreIcon className="text-slate-500" />} className="min-h-14 px-4 hover:bg-slate-50/80">
-              <div>
-                <Typography component="span" className="font-semibold text-slate-900">
-                  Developer tools
-                </Typography>
-                <Typography variant="caption" component="span" className="ml-2 text-slate-500">
-                  Deploy, wallets, raw intents, circuits
-                </Typography>
-              </div>
-            </AccordionSummary>
-            <AccordionDetails className="border-t border-slate-100 px-4 pb-6 pt-2">
-              <ZkStablesProvider logger={devMidnightLogger}>
+            <Accordion
+              defaultExpanded={import.meta.env.DEV}
+              disableGutters
+              elevation={0}
+              className="w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm !before:hidden"
+            >
+              <AccordionSummary expandIcon={<ExpandMoreIcon className="text-slate-500" />} className="min-h-14 px-4 hover:bg-slate-50/80">
+                <div>
+                  <Typography component="span" className="font-semibold text-slate-900">
+                    Developer tools
+                  </Typography>
+                  <Typography variant="caption" component="span" className="ml-2 text-slate-500">
+                    Deploy, wallets, raw intents, circuits
+                  </Typography>
+                </div>
+              </AccordionSummary>
+              <AccordionDetails className="border-t border-slate-100 px-4 pb-6 pt-2">
                 <Stack spacing={3}>
                   <CrossChainIntentPanel />
                   <DemoWalletsPanel />
@@ -84,9 +84,9 @@ const App: React.FC = () => {
                   <TxLog />
                   <FullDemoRundown />
                 </Stack>
-              </ZkStablesProvider>
-            </AccordionDetails>
-          </Accordion>
+              </AccordionDetails>
+            </Accordion>
+          </ZkStablesProvider>
         </div>
       </Container>
     </div>

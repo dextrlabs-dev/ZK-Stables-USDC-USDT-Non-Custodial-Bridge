@@ -134,5 +134,13 @@ export default defineConfig(({ mode }) => ({
     warmup: {
       clientFiles: ['./index.html', './src/main.tsx', './src/globals.ts', './src/bootstrap.tsx', './src/App.tsx'],
     },
+    // Browser → Yaci Store would hit CORS; same-origin `/yaci-store` proxies to Blockfrost-compatible API.
+    proxy: {
+      '/yaci-store': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/yaci-store/u, '/api/v1'),
+      },
+    },
   },
 }));

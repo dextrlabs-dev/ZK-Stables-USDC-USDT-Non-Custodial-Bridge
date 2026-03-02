@@ -10,7 +10,7 @@ Implements the **architecture blueprint** control flow:
 4. **Destination** — on-chain settlement when the corresponding env vars are set (required under `RELAYER_SRS_STRICT`):
    - **LOCK → EVM**: `ZkStablesBridgeMint.mintWrapped` (`RELAYER_EVM_BRIDGE_MINT`, `RELAYER_EVM_WRAPPED_TOKEN`, `RELAYER_EVM_PRIVATE_KEY`). Amount uses `RELAYER_EVM_TOKEN_DECIMALS` (default 6). `nonce` defaults to the stub **proof digest** (bytes32) if `intent.source.evm.nonce` is omitted.
    - **BURN → EVM recipient** (`0x…`): `unlockWithInclusionProof` on `RELAYER_EVM_POOL_LOCK` when Merkle proof + pool env are present.
-   - **LOCK → Cardano** or **BURN → Cardano** (`addr1…` / `addr_test1…`): **Mesh** payout from `RELAYER_CARDANO_WALLET_MNEMONIC` — lovelace (`RELAYER_CARDANO_PAYOUT_LOVELACE`) and optionally a native asset (`RELAYER_CARDANO_ASSET_UNIT` + decimals). Not Plutus minting; operator treasury transfer for demo.
+   - **LOCK → Cardano** or **BURN → Cardano** (`addr1…` / `addr_test1…`): **Aiken `lock_pool`** (`cardano/aiken`, `plutus.json` via `RELAYER_CARDANO_PLUTUS_JSON` or default path) — **mint** native asset (Mesh `ForgeScript` + [mint](https://meshjs.dev/apis/txbuilder/minting)), **lock** at script with `LockDatum`, then **`BridgeRelease`** to the recipient (two txs). **BURN** with **Cardano source** and non-Cardano destination: **`BridgeRelease`** on `intent.source.cardano` (`txHash` / `outputIndex`); payout bech32 is `intent.recipient` when Cardano, else `RELAYER_BRIDGE_CARDANO_RECIPIENT` or `RELAYER_CARDANO_RELEASE_PAYOUT_ADDRESS`. Bridge wallet needs **collateral** for Plutus spends.
    - **LOCK → Midnight**: `RELAYER_MIDNIGHT_ENABLED` — relayer runs `proveHolder` + `mintWrappedUnshielded` (see `src/midnight/service.ts`).
 
 **Bridge wallets** — `RELAYER_BRIDGE_EVM_RECIPIENT`, `RELAYER_BRIDGE_CARDANO_RECIPIENT`, and `RELAYER_BRIDGE_MIDNIGHT_RECIPIENT` populate `intent.connected.relayerBridge` and default `recipient` when `POST` omits it (SRS: **required** when `RELAYER_SRS_STRICT`). `GET /v1/bridge/recipients` returns configured addresses; `/v1/health/chains` includes `relayerBridge` configured booleans only.
@@ -89,9 +89,15 @@ See [`../scripts/README-local-evm.md`](../scripts/README-local-evm.md).
 | `RELAYER_CARDANO_WALLET_MNEMONIC` | _(unset)_ | 24-word mnemonic for Mesh `MeshWallet` (fund on your network) |
 | `RELAYER_CARDANO_NETWORK_ID` | `0` | `0` = testnet addresses, `1` = mainnet |
 | `RELAYER_CARDANO_MESH_NETWORK` | `preprod` | Mesh network id (`preprod`, `preview`, `mainnet`, …) |
-| `RELAYER_CARDANO_PAYOUT_LOVELACE` | `3000000` | Lovelace sent with each Cardano bridge payout (plus min-ADA when sending tokens) |
-| `RELAYER_CARDANO_ASSET_UNIT` | _(unset)_ | Optional full hex asset unit (`policyId` + `assetName`) to attach to payouts |
-| `RELAYER_CARDANO_ASSET_DECIMALS` | `6` | Decimals when interpreting `intent.amount` for the optional native asset |
+| `RELAYER_CARDANO_PLUTUS_JSON` | _(auto)_ | Absolute path to `cardano/aiken/plutus.json` (from `aiken build`). Default: `zk-stables-relayer/../../../../cardano/aiken/plutus.json` relative to package |
+| `RELAYER_CARDANO_PAYOUT_LOVELACE` | `3000000` | Lovelace in the locked UTxO (min-ADA; floored by `RELAYER_CARDANO_MINT_OUTPUT_LOVELACE`) |
+| `RELAYER_CARDANO_ASSET_DECIMALS` | `6` | Decimals when interpreting `intent.amount` |
+| `RELAYER_CARDANO_MINT_TOKEN_NAME` | _(unset)_ | Override ASCII token name for WUSDC/WUSDT mint (default from `intent.asset`) |
+| `RELAYER_CARDANO_MINT_OUTPUT_LOVELACE` | `2000000` | Min lovelace in the lock output carrying minted assets |
+| `RELAYER_CARDANO_RECIPIENT_COMMITMENT_HEX` | _(derived)_ | Optional 64-hex `recipient_commitment` in `LockDatum`; default SHA-256 of `lockRef:proofDigest` |
+| `RELAYER_CARDANO_LOCK_SOURCE_CHAIN_ID` / `RELAYER_CARDANO_LOCK_DEST_CHAIN_ID` | `0` | `source_chain_id` / `destination_chain_id` in `LockDatum` |
+| `RELAYER_CARDANO_LOCK_NONCE` | `0` | `lock_nonce` in `LockDatum` |
+| `RELAYER_CARDANO_RELEASE_PAYOUT_ADDRESS` | _(unset)_ | Bech32 payout when BURN recipient is not Cardano (with `RELAYER_BRIDGE_CARDANO_RECIPIENT`) |
 | `RELAYER_MIDNIGHT_ENABLED` | _(false)_ | Run Midnight mint pipeline after LOCK → midnight |
 | `GENESIS_SEED_HASH_HEX` | _(unset)_ | **Preferred:** 64 hex chars = 32-byte HD seed (same as zk-stables-ui + `local-cli` `run-genesis-all`). Deploy/join keys default from `zkstables:depositCommitment:v1` / `operatorSk` / `holderSk` unless `DEPOSIT_COMMITMENT_HEX` / `OPERATOR_SK_HEX` / `HOLDER_SK_HEX` are set. |
 | `BIP39_MNEMONIC` | _(unset)_ | Midnight relayer wallet when **`GENESIS_SEED_HASH_HEX` is not set** |

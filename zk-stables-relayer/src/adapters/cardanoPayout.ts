@@ -1,7 +1,7 @@
 /**
  * Cardano settlement: send lovelace and/or a native asset from a relayer mnemonic wallet to a bech32 recipient.
- * Uses Mesh (same stack as `cardano/ts`). This is not Plutus minting — it is operator payout / treasury transfer
- * for bridge demo (minting requires policy keys and is out of scope here).
+ * Uses Mesh (same stack as `cardano/ts`). This is **transfer-only** (lovelace + optional existing native asset from the
+ * operator wallet). Bridge settlement for WUSDC/WUSDT uses mint/burn only — see `cardanoMintPayout.ts`.
  */
 import { BlockfrostProvider, MeshTxBuilder, MeshWallet, YaciProvider } from '@meshsdk/core';
 import type { Asset, IFetcher, IEvaluator, ISubmitter, Network, UTxO } from '@meshsdk/common';

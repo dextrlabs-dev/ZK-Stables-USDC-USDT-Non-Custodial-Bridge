@@ -110,3 +110,13 @@ export async function fetchBridgedWrappedBalances(params: {
   if (!r) return {};
   return { wusdc: r.wusdc, wusdt: r.wusdt };
 }
+
+/** Native ETH (Anvil) for one address — full string for display. */
+export async function fetchNativeEthBalance(params: { rpcUrl: string; account: Address }): Promise<string> {
+  const client = createPublicClient({
+    chain: localhost,
+    transport: http(params.rpcUrl),
+  });
+  const wei = await client.getBalance({ address: params.account });
+  return formatEther(wei);
+}

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { encodePacked, keccak256 } from 'viem';
 import type { BridgeIntent, RelayerJob } from '../types.js';
 import { finalityDelayMs } from '../adapters/finality.js';
@@ -32,12 +32,13 @@ import type { Logger } from 'pino';
 import { isMidnightBridgeEnabled, runMidnightMintPipeline } from '../midnight/service.js';
 import { parseDecimalAmountToUnits } from '../adapters/amount.js';
 import {
-  cardanoPayoutToRecipient,
   cardanoRecipientMatchesNetwork,
   ensureCardanoBridgeWallet,
   isCardanoBridgeEnabled,
   looksLikeCardanoAddress,
 } from '../adapters/cardanoPayout.js';
+import { lockMintThenBridgeRelease, bridgeReleaseLockUtxo } from '../adapters/cardanoAiken/lockPoolBridge.js';
+import { relayerBridgeCardanoRecipient } from '../config/bridgeRecipients.js';
 import { buildLockRefFromIntent } from './lockRef.js';
 
 function destLabel(intent: BridgeIntent): string {
@@ -65,9 +66,46 @@ function destinationHint(intent: BridgeIntent, digest: string): string {
     return `EVM destination: ZkStablesBridgeMint.mintWrapped to ${intent.recipient} when RELAYER_EVM_BRIDGE_MINT + RELAYER_EVM_WRAPPED_TOKEN + RELAYER_EVM_PRIVATE_KEY are set (nonce from proof digest if omitted on intent).`;
   }
   if (dest.includes('cardano')) {
-    return `Cardano destination: operator payout to ${intent.recipient} when RELAYER_CARDANO_BRIDGE_ENABLED and a funded mnemonic + Yaci/Blockfrost are configured (lovelace/asset per env).`;
+    return `Cardano destination: Aiken lock_pool (cardano/aiken) — mint under native policy, lock at script, BridgeRelease to ${intent.recipient} (2 txs) when bridge wallet + plutus.json + collateral are configured.`;
   }
   return `Destination ${intent.destinationChain ?? 'unknown'}: submit proofBundle to chain verifier, then mint/release per bridge rules.`;
+}
+
+/** 32-byte hex `recipient_commitment` for `LockDatum` (override via `RELAYER_CARDANO_RECIPIENT_COMMITMENT_HEX`). */
+function cardanoRecipientCommitmentHex(lockRef: string, proofDigest: string): string {
+  const env = process.env.RELAYER_CARDANO_RECIPIENT_COMMITMENT_HEX?.trim();
+  if (env && /^[0-9a-fA-F]{64}$/u.test(env)) return env.toLowerCase();
+  return createHash('sha256').update(`${lockRef}:${proofDigest}`, 'utf8').digest('hex');
+}
+
+/** LOCK/BURN → Cardano: Aiken `lock_pool` — mint + lock + `BridgeRelease` to recipient. */
+async function cardanoSettlementPayout(params: {
+  recipient: string;
+  amountStr: string;
+  asset: 'USDC' | 'USDT';
+  recipientCommitmentHex: string;
+  logger: Logger;
+}): Promise<{ detail: string }> {
+  const r = await lockMintThenBridgeRelease({
+    recipientBech32: params.recipient,
+    amountStr: params.amountStr,
+    asset: params.asset,
+    recipientCommitmentHex: params.recipientCommitmentHex,
+    logger: params.logger,
+  });
+  return { detail: r.detail };
+}
+
+function cardanoBurnReleasePayoutBech32(intent: BridgeIntent): string {
+  const r = intent.recipient.trim();
+  if (r.startsWith('addr_test1') || (r.startsWith('addr1') && !r.startsWith('addr_test1'))) return r;
+  const bridge = relayerBridgeCardanoRecipient();
+  if (bridge && (bridge.startsWith('addr_test1') || bridge.startsWith('addr1'))) return bridge;
+  const env = process.env.RELAYER_CARDANO_RELEASE_PAYOUT_ADDRESS?.trim();
+  if (env && (env.startsWith('addr_test1') || env.startsWith('addr1'))) return env;
+  throw new Error(
+    'Cardano BURN release: set recipient to a bech32 address, or set RELAYER_BRIDGE_CARDANO_RECIPIENT / RELAYER_CARDANO_RELEASE_PAYOUT_ADDRESS for non-bech32 recipients',
+  );
 }
 
 export async function enqueueLockIntent(logger: Logger, intent: BridgeIntent): Promise<RelayerJob | null> {
@@ -197,6 +235,40 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
     });
     logger.info({ id, digest: proofBundle.digest, depositCommitmentHex }, 'destination_handoff');
 
+    // BURN, Cardano source, non-Cardano destination: Aiken lock_pool `BridgeRelease` (unlock locked value).
+    if (
+      job.intent.operation === 'BURN' &&
+      job.intent.sourceChain === 'cardano' &&
+      !destLabel(job.intent).includes('cardano') &&
+      isCardanoBridgeEnabled()
+    ) {
+      const bridge = await ensureCardanoBridgeWallet(logger);
+      const src = job.intent.source?.cardano;
+      if (bridge && src?.txHash !== undefined && src.outputIndex !== undefined) {
+        try {
+          const payout = cardanoBurnReleasePayoutBech32(job.intent);
+          const { detail } = await bridgeReleaseLockUtxo({
+            lockTxHash: src.txHash,
+            lockOutputIndex: src.outputIndex,
+            payoutBech32: payout,
+            logger,
+          });
+          const j = getJob(id);
+          patchJob(id, {
+            destinationHint: `${j?.destinationHint ?? hint}\n${detail}`,
+          });
+        } catch (e) {
+          logger.error({ err: e, id }, 'cardano lock release failed');
+          throw e;
+        }
+      } else if (bridge && (!src?.txHash || src.outputIndex === undefined)) {
+        logger.warn(
+          { id },
+          'cardano BURN release skipped: intent.source.cardano.txHash / outputIndex required for lock_pool spend',
+        );
+      }
+    }
+
     // FR-3.1.5: burn → prove → unlock on source pool (EVM) when recipient is an EVM address.
     let evmBurnUnlockDone = false;
     if (
@@ -245,20 +317,15 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       const bridge = await ensureCardanoBridgeWallet(logger);
       if (bridge) {
         try {
-          const lovelace = BigInt(process.env.RELAYER_CARDANO_PAYOUT_LOVELACE ?? '3000000');
-          const assetUnit = process.env.RELAYER_CARDANO_ASSET_UNIT?.trim();
-          const assetDecimals = Number(process.env.RELAYER_CARDANO_ASSET_DECIMALS ?? 6);
-          const assetQty =
-            assetUnit && assetUnit.length > 0
-              ? parseDecimalAmountToUnits(job.intent.amount, assetDecimals)
-              : undefined;
-          const { txHash } = await cardanoPayoutToRecipient({
-            recipientBech32: job.intent.recipient,
-            lovelace,
-            ...(assetUnit && assetQty !== undefined ? { assetUnit, assetQuantity: assetQty } : {}),
+          const commitment = cardanoRecipientCommitmentHex(job.lockRef, proofBundle.digest);
+          const { detail } = await cardanoSettlementPayout({
+            recipient: job.intent.recipient,
+            amountStr: job.intent.amount,
+            asset: job.intent.asset,
+            recipientCommitmentHex: commitment,
             logger,
           });
-          patchJob(id, { destinationHint: `${hint}\nCardano unlock/payout tx: ${txHash}` });
+          patchJob(id, { destinationHint: `${hint}\n${detail}` });
         } catch (e) {
           logger.error({ err: e, id }, 'cardano BURN payout failed');
           throw e;
@@ -307,20 +374,15 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       const bridge = await ensureCardanoBridgeWallet(logger);
       if (bridge) {
         try {
-          const lovelace = BigInt(process.env.RELAYER_CARDANO_PAYOUT_LOVELACE ?? '3000000');
-          const assetUnit = process.env.RELAYER_CARDANO_ASSET_UNIT?.trim();
-          const assetDecimals = Number(process.env.RELAYER_CARDANO_ASSET_DECIMALS ?? 6);
-          const assetQty =
-            assetUnit && assetUnit.length > 0
-              ? parseDecimalAmountToUnits(job.intent.amount, assetDecimals)
-              : undefined;
-          const { txHash } = await cardanoPayoutToRecipient({
-            recipientBech32: job.intent.recipient,
-            lovelace,
-            ...(assetUnit && assetQty !== undefined ? { assetUnit, assetQuantity: assetQty } : {}),
+          const commitment = cardanoRecipientCommitmentHex(job.lockRef, proofBundle.digest);
+          const { detail } = await cardanoSettlementPayout({
+            recipient: job.intent.recipient,
+            amountStr: job.intent.amount,
+            asset: job.intent.asset,
+            recipientCommitmentHex: commitment,
             logger,
           });
-          patchJob(id, { destinationHint: `${hint}\nCardano payout tx: ${txHash}` });
+          patchJob(id, { destinationHint: `${hint}\n${detail}` });
         } catch (e) {
           logger.error({ err: e, id }, 'cardano LOCK payout failed');
           throw e;
