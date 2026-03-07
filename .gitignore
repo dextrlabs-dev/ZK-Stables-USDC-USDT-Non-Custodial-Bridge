@@ -24,6 +24,8 @@ pnpm-debug.log*
 # Test / coverage
 coverage/
 .nyc_output/
+test-results/
+evm/test-results/
 
 # OS
 .DS_Store
