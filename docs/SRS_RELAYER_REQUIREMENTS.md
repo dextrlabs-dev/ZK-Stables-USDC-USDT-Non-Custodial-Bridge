@@ -54,6 +54,18 @@ Also set `RELAYER_EVM_WRAPPED_TOKEN` to the token the burn watcher monitors (sam
 | `RELAYER_BRIDGE_CARDANO_RECIPIENT` | Default Cardano operator recipient. |
 | `RELAYER_BRIDGE_MIDNIGHT_RECIPIENT` | Default Midnight bech32 recipient. |
 
+## Redeem parity (supplementary env)
+
+These are **not** all required for `RELAYER_SRS_STRICT` today; they tune **BURN** behavior for USDC/USDT + user-signed Cardano release.
+
+| Variable | Role |
+|----------|------|
+| `RELAYER_EVM_WRAPPED_TOKEN_USDC` / `RELAYER_EVM_WRAPPED_TOKEN_USDT` | When both are set, the burn watcher ingests `Burned` from **each** wrapped token. If unset, fall back to `RELAYER_EVM_WRAPPED_TOKEN` + `RELAYER_EVM_BURN_ASSET`. |
+| `RELAYER_CARDANO_OPERATOR_BURN_RELEASE` | If `true`, the relayer may submit operator `bridgeReleaseLockUtxo` for Cardano-sourced BURN. If unset/false, expect **user** `BridgeRelease` and `source.cardano.spendTxHash` on the intent. |
+| `RELAYER_CARDANO_DESTINATION_LOCK_HOLD` | If `true`, LOCK→Cardano settlement **only** mints+locks at `lock_pool` with **no** bridge operator in datum (recipient signs `BridgeRelease` in the browser). |
+
+`POST /v1/intents/burn` with `sourceChain: "midnight"` requires `source.midnight.txId` (or `txHash`). Cardano-sourced burns are validated against lock datum when the Cardano bridge + indexer are enabled.
+
 ## Reference template
 
 See `zk-stables-relayer/.env.integration.example` (all keys populated; replace placeholders with your network values).

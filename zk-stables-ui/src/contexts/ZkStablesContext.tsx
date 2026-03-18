@@ -32,6 +32,10 @@ import { formatShieldedAddressForDisplay } from '../utils/shieldedAddressDisplay
 
 const NETWORK_ID = (import.meta.env.VITE_NETWORK_ID || 'undeployed') as string;
 
+const MIDNIGHT_PROOF_SERVER_PORT = Number(
+  import.meta.env.VITE_MIDNIGHT_PROOF_SERVER_PORT ?? 6300,
+);
+
 function replacerSafe(_key: string, value: unknown): unknown {
   if (typeof value === 'bigint') return value.toString();
   return value;
@@ -163,7 +167,8 @@ export type ZkStablesContextValue = {
   refreshLedger: () => Promise<void>;
   proveHolder: () => Promise<void>;
   mintWrappedUnshielded: () => Promise<void>;
-  initiateBurn: () => Promise<void>;
+  /** Optional args bypass `recipientCommHex` / `burnDestChain` state (e.g. Bridge redeem wizard). */
+  initiateBurn: (override?: { recipientCommHex64?: string; destChain?: string }) => Promise<void>;
   sendWrappedUnshieldedToUser: () => Promise<void>;
   finalizeBurn: () => Promise<void>;
   canProveHolder: boolean;
@@ -171,6 +176,15 @@ export type ZkStablesContextValue = {
   canInitiateBurn: boolean;
   canSendWrapped: boolean;
   canFinalizeBurn: boolean;
+  /** After a successful `initiateBurn`, use for relayer `BURN` intent (`burnCommitmentHex` + `source.midnight`). */
+  lastMidnightBurnAnchor: {
+    txId: string;
+    txHash: string;
+    recipientCommHex64: string;
+    destChain: string;
+    contractAddress: string | null;
+  } | null;
+  clearLastMidnightBurnAnchor: () => void;
 };
 
 export const ZkStablesReactContext = createContext<ZkStablesContextValue | undefined>(undefined);
@@ -193,6 +207,11 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
   const [contractAddress, setContractAddress] = useState<ContractAddress | null>(null);
   const [ledger, setLedger] = useState<LedgerView | null>(null);
   const [txLog, setTxLog] = useState<TxLogEntry[]>([]);
+  const [lastMidnightBurnAnchor, setLastMidnightBurnAnchor] = useState<ZkStablesContextValue['lastMidnightBurnAnchor']>(
+    null,
+  );
+
+  const clearLastMidnightBurnAnchor = useCallback(() => setLastMidnightBurnAnchor(null), []);
 
   const [deployParams, setDeployParams] = useState<ZkStablesDeployParams>({
     depositCommitmentHex: '00'.repeat(32),
@@ -349,7 +368,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
         setNetworkId('undeployed');
 
         const zkConfigProvider = new FetchZkConfigProvider<ZkCircuitId>(zkArtifactsBaseUrl(), fetch.bind(window));
-        const proofProvider = httpClientProofProvider(sameHostUrl(6300), zkConfigProvider);
+        const proofProvider = httpClientProofProvider(sameHostUrl(MIDNIGHT_PROOF_SERVER_PORT), zkConfigProvider);
         const publicDataProvider = indexerPublicDataProvider(
           sameHostUrl(8088, '/api/v4/graphql'),
           sameHostWsUrl(8088, '/api/v4/graphql/ws'),
@@ -548,6 +567,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     setUnshieldedAddress(null);
     setContractAddress(null);
     setLedger(null);
+    setLastMidnightBurnAnchor(null);
     setFlowMessage(undefined);
     deploymentSubject.next({ status: 'idle' });
   }, [deploymentSubject]);
@@ -555,6 +575,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
   const connectDevSeedWallet = useCallback(
     async (seedHashHex: string) => {
       setFlowMessage('Connecting dev seed wallet (no Lace)…');
+      setLastMidnightBurnAnchor(null);
       providersCacheRef.current = null;
       walletRef.current = null;
       devWalletRef.current = await initDevWalletFromSeedHash({
@@ -563,7 +584,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
         indexerHttpUrl: sameHostUrl(8088, '/api/v4/graphql'),
         indexerWsUrl: sameHostWsUrl(8088, '/api/v4/graphql/ws'),
         nodeWsUrl: sameHostWsUrl(9944),
-        provingServerUrl: sameHostUrl(6300),
+        provingServerUrl: sameHostUrl(MIDNIGHT_PROOF_SERVER_PORT),
       });
       await initializeProviders();
       setFlowMessage(undefined);
@@ -751,19 +772,34 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     }
   }, [appendTxLog, refreshLedger, requireDeployed]);
 
-  const initiateBurn = useCallback(async () => {
-    const d = requireDeployed();
-    const dest = BigInt(burnDestChain || '0');
-    const comm = hexToBytes32(recipientCommHex);
-    setFlowMessage('initiateBurn: prove → submit → waiting for indexer…');
-    try {
-      const r = await d.callTx.initiateBurn(dest, comm);
-      appendTxLog('initiateBurn', r.public);
-      await refreshLedger();
-    } finally {
-      setFlowMessage(undefined);
-    }
-  }, [appendTxLog, burnDestChain, recipientCommHex, refreshLedger, requireDeployed]);
+  const initiateBurn = useCallback(
+    async (override?: { recipientCommHex64?: string; destChain?: string }) => {
+      const d = requireDeployed();
+      const destStr = (override?.destChain ?? burnDestChain) || '0';
+      const commBare = (override?.recipientCommHex64 ?? recipientCommHex).replace(/^0x/i, '').trim().toLowerCase();
+      if (commBare.length !== 64 || !/^[0-9a-f]+$/u.test(commBare)) {
+        throw new Error('recipient commitment must be 64 hex chars (32 bytes)');
+      }
+      const dest = BigInt(destStr);
+      const comm = hexToBytes32(commBare);
+      setFlowMessage('initiateBurn: prove → submit → waiting for indexer…');
+      try {
+        const r = await d.callTx.initiateBurn(dest, comm);
+        appendTxLog('initiateBurn', r.public);
+        setLastMidnightBurnAnchor({
+          txId: String(r.public.txId),
+          txHash: String(r.public.txHash),
+          recipientCommHex64: uint8ArrayToHex(comm).toLowerCase(),
+          destChain: destStr,
+          contractAddress: contractAddress ? String(contractAddress) : null,
+        });
+        await refreshLedger();
+      } finally {
+        setFlowMessage(undefined);
+      }
+    },
+    [appendTxLog, burnDestChain, contractAddress, recipientCommHex, refreshLedger, requireDeployed],
+  );
 
   const sendWrappedUnshieldedToUser = useCallback(async () => {
     const d = requireDeployed();
@@ -848,10 +884,13 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       canInitiateBurn,
       canSendWrapped,
       canFinalizeBurn,
+      lastMidnightBurnAnchor,
+      clearLastMidnightBurnAnchor,
     }),
     [
       burnDestChain,
       canFinalizeBurn,
+      clearLastMidnightBurnAnchor,
       canInitiateBurn,
       canMint,
       canProveHolder,
@@ -871,6 +910,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       isConnected,
       isConnecting,
       joinAddress,
+      lastMidnightBurnAnchor,
       ledger,
       mintWrappedUnshielded,
       proveHolder,

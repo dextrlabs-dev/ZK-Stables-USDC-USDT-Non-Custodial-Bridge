@@ -1,5 +1,5 @@
 import { createPublicClient, formatEther, formatUnits, http, type Address } from 'viem';
-import { localhost } from 'viem/chains';
+import { hardhat } from 'viem/chains';
 
 const erc20BalanceAbi = [
   {
@@ -16,7 +16,7 @@ export type AnvilBalanceRow = {
   ethFormatted: string;
   usdc?: string;
   usdt?: string;
-  /** ZkStablesWrappedToken balances (bridge-minted on EVM). */
+  /** ZkStablesWrappedToken balances (zkUSDC/zkUSDT — verifier-gated bridge mint on EVM). */
   wusdc?: string;
   wusdt?: string;
 };
@@ -35,7 +35,7 @@ export async function fetchAnvilDemoBalances(params: {
   tokenDecimals?: number;
 }): Promise<AnvilBalanceRow[]> {
   const client = createPublicClient({
-    chain: localhost,
+    chain: hardhat,
     transport: http(params.rpcUrl),
   });
   const dec = params.tokenDecimals ?? 6;
@@ -111,10 +111,30 @@ export async function fetchBridgedWrappedBalances(params: {
   return { wusdc: r.wusdc, wusdt: r.wusdt };
 }
 
+/** Mock underlying mUSDC / mUSDT (`deploy-anvil.js`) for one EVM account. */
+export async function fetchUnderlyingStableBalances(params: {
+  rpcUrl: string;
+  account: Address;
+  usdc?: Address;
+  usdt?: Address;
+  tokenDecimals?: number;
+}): Promise<{ usdc?: string; usdt?: string }> {
+  const rows = await fetchAnvilDemoBalances({
+    rpcUrl: params.rpcUrl,
+    accounts: [params.account],
+    usdc: params.usdc,
+    usdt: params.usdt,
+    tokenDecimals: params.tokenDecimals,
+  });
+  const r = rows[0];
+  if (!r) return {};
+  return { usdc: r.usdc, usdt: r.usdt };
+}
+
 /** Native ETH (Anvil) for one address — full string for display. */
 export async function fetchNativeEthBalance(params: { rpcUrl: string; account: Address }): Promise<string> {
   const client = createPublicClient({
-    chain: localhost,
+    chain: hardhat,
     transport: http(params.rpcUrl),
   });
   const wei = await client.getBalance({ address: params.account });

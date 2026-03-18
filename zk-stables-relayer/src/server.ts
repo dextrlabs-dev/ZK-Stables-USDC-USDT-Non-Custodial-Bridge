@@ -27,8 +27,15 @@ import {
 } from './config/bridgeRecipients.js';
 import { isMidnightBridgeEnabled, warmupMidnightRelayer } from './midnight/service.js';
 import { assertRelayerStartupConfig } from './config/srsCompliance.js';
+import { validateCardanoBurnIntentLockDatum } from './adapters/cardanoAiken/validateCardanoBurnIntent.js';
+import { loadBlueprint } from './adapters/cardanoAiken/blueprint.js';
+import { getLockPoolScript } from './adapters/cardanoAiken/scripts.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+
+function looksLikeEvmAddress(addr: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/u.test(addr.trim());
+}
 assertRelayerStartupConfig(logger);
 const port = Number(process.env.RELAYER_PORT ?? 8787);
 
@@ -107,6 +114,24 @@ app.get('/v1/health/chains', async (c) => {
 
 app.get('/v1/bridge/recipients', (c) => c.json(relayerBridgeSnapshot()));
 
+/** Lock pool script CBOR + address for Mesh in the browser (same blueprint as relayer). */
+app.get('/v1/cardano/bridge-metadata', (c) => {
+  try {
+    const networkId = Number(process.env.RELAYER_CARDANO_NETWORK_ID ?? process.env.CARDANO_NETWORK_ID ?? 0) === 1 ? 1 : 0;
+    const bp = loadBlueprint();
+    const { scriptCbor, address } = getLockPoolScript(bp, networkId);
+    return c.json({
+      networkId,
+      meshNetwork: process.env.RELAYER_CARDANO_MESH_NETWORK ?? process.env.CARDANO_MESH_NETWORK ?? 'preprod',
+      lockScriptAddress: address,
+      lockScriptCborHex: scriptCbor,
+    });
+  } catch (e) {
+    logger.error({ err: e }, 'GET /v1/cardano/bridge-metadata failed');
+    return c.json({ error: 'Cardano blueprint / lock script not available on this server' }, 503);
+  }
+});
+
 /** Demo wallets (mnemonics + derived EVM keys) — local integration only. */
 app.get('/v1/demo/wallets', (c) => {
   if (process.env.RELAYER_ENABLE_DEMO_WALLETS !== 'true') {
@@ -125,6 +150,15 @@ app.post('/v1/intents/lock', async (c) => {
   if (body.operation !== 'LOCK') return c.json({ error: 'operation must be LOCK' }, 400);
   if (!body.sourceChain || !['evm', 'cardano', 'midnight'].includes(body.sourceChain)) {
     return c.json({ error: 'invalid sourceChain' }, 400);
+  }
+  if (body.sourceChain !== 'evm') {
+    return c.json(
+      {
+        error:
+          'HTTP LOCK mint path: sourceChain must be evm (lock USDC/USDT on EVM → zk on Cardano/Midnight). Cardano lock UTxOs are picked up by RELAYER_CARDANO_WATCHER_ENABLED only.',
+      },
+      400,
+    );
   }
   mergeRelayerBridgeIntoConnected(body);
   const recipient = effectiveLockRecipient(body);
@@ -161,15 +195,46 @@ app.post('/v1/intents/burn', async (c) => {
     return c.json(
       {
         error:
-          'recipient required (or set RELAYER_BRIDGE_EVM_RECIPIENT for BURN from evm, RELAYER_BRIDGE_CARDANO_RECIPIENT from cardano, or either for BURN from midnight)',
+          'recipient required (or set RELAYER_BRIDGE_EVM_RECIPIENT — BURN from Cardano/Midnight pays underlying on EVM only)',
       },
       400,
     );
   }
   body.recipient = recipient;
+  if (
+    (body.sourceChain === 'cardano' || body.sourceChain === 'midnight') &&
+    !looksLikeEvmAddress(body.recipient)
+  ) {
+    return c.json(
+      {
+        error:
+          'BURN from Cardano or Midnight requires recipient as an Ethereum 0x address (underlying USDC/USDT is claimed on EVM)',
+      },
+      400,
+    );
+  }
   const bc = body.burnCommitmentHex?.replace(/^0x/i, '') ?? '';
   if (bc.length !== 64 || !/^[0-9a-fA-F]+$/.test(bc)) {
-    return c.json({ error: 'burnCommitmentHex required: 64 hex chars (32-byte Midnight burn binding)' }, 400);
+    return c.json({ error: 'burnCommitmentHex required: 64 hex chars (32-byte burn binding)' }, 400);
+  }
+
+  if (body.sourceChain === 'midnight') {
+    const mid = body.source?.midnight;
+    const tid = mid?.txId?.trim() || mid?.txHash?.trim();
+    if (!tid) {
+      return c.json(
+        {
+          error:
+            'Midnight BURN requires source.midnight.txId (or txHash) from the transaction that included initiateBurn',
+        },
+        400,
+      );
+    }
+  }
+
+  const cardanoCheck = await validateCardanoBurnIntentLockDatum(body, logger);
+  if (!cardanoCheck.ok) {
+    return c.json({ error: cardanoCheck.error }, 400);
   }
 
   const job = await enqueueLockIntent(logger, body);

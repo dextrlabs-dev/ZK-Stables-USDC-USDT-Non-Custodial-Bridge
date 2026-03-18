@@ -1,0 +1,17 @@
+---
+description: After editing relayer, UI, or local scripts, restart dev services (do not only tell the user).
+globs: zk-stables-relayer/**/*,zk-stables-ui/**/*,scripts/**/*
+alwaysApply: false
+---
+
+# Restart local dev services after changes
+
+When you change code under `zk-stables-relayer/`, `zk-stables-ui/`, or `scripts/` for this repo, **run the restart script from the repo root** (if the environment has shell access and Docker/network are available):
+
+```bash
+./scripts/restart-local-dev-services.sh
+```
+
+This restarts the **relayer** and **Vite** so new TypeScript and UI code load. It does **not** restart Hardhat, Yaci, Midnight, or proof-server; run `./scripts/start-local-stack.sh` or `./scripts/start-yaci-devkit.sh` when those layers need a full bring-up.
+
+Do not end the turn with “you should restart” alone when you can execute the script yourself.

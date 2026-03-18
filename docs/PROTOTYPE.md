@@ -5,9 +5,10 @@ This repository is a **non-custodial bridge prototype** between stablecoin rails
 ## What is implemented
 
 - **Midnight (`contract/`, `local-cli/`, `zk-stables-ui/`)** — Tier A / Tier B Compact programs, managed artifacts, local deploy and operation scripts against an undeployed / local Midnight network, and a browser dApp patterned on Midnight example apps.
-- **EVM (`evm/`)** — Solidity contracts (including wrapped stable representation and bridge mint paths) with Hardhat tests and local Anvil-oriented scripts.
+- **EVM (`evm/`)** — Solidity contracts: mock **mUSDC/mUSDT**, pool lock, and **zkUSDC/zkUSDT** (bridge-minted after `ZkStablesBridgeMint` verification; see [BRIDGE_SWAP_FLOW.md](BRIDGE_SWAP_FLOW.md)) with Hardhat tests and Anvil scripts.
 - **Cardano (`cardano/`)** — Aiken validators and TypeScript CLI flows (lock, refund, release, registry) using Mesh SDK.
 - **Relayer (`zk-stables-relayer/`)** — HTTP service wiring cross-chain concerns (TypeScript).
+- **Redeem (BURN) parity** — EVM `Burned` ingestion; Cardano lock datum + optional user `BridgeRelease` (`RELAYER_CARDANO_DESTINATION_LOCK_HOLD`, `RELAYER_CARDANO_OPERATOR_BURN_RELEASE`); Midnight `initiateBurn` bound via `source.midnight` on `POST /v1/intents/burn`. See [BURN_ANCHOR_SPEC.md](BURN_ANCHOR_SPEC.md).
 
 ## What is not guaranteed
 

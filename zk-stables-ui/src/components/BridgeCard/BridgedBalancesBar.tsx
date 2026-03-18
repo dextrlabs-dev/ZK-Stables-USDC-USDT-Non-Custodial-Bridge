@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnection } from 'wagmi';
 import type { Address } from 'viem';
-import { fetchBridgedWrappedBalances, fetchNativeEthBalance } from '../../lib/anvilDemoBalances.js';
+import {
+  fetchBridgedWrappedBalances,
+  fetchNativeEthBalance,
+  fetchUnderlyingStableBalances,
+} from '../../lib/anvilDemoBalances.js';
+import { parseEnvEthereumAddress } from '../../utils/envAddress.js';
 import {
   fetchYaciAddressAda,
   fetchYaciAddressNativeAssetQuantity,
   formatNativeUnits,
+  isYaciStoreReachable,
   resolveYaciStoreBaseUrl,
 } from '../../lib/yaciAddressBalance.js';
 import { useZkStables } from '../../hooks/useZkStables.js';
@@ -30,8 +36,10 @@ function fmtLedgerAmount(n: bigint): string {
 export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ demo }) => {
   const { ledger, contractAddress, walletAddress, unshieldedAddress, refreshLedger } = useZkStables();
   const rpcUrl = import.meta.env.VITE_ETH_LOCALHOST_RPC_URL || 'http://127.0.0.1:8545';
-  const wusdc = (import.meta.env.VITE_DEMO_WUSDC_ADDRESS as Address | undefined)?.trim() as Address | undefined;
-  const wusdt = (import.meta.env.VITE_DEMO_WUSDT_ADDRESS as Address | undefined)?.trim() as Address | undefined;
+  const usdc = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDC_ADDRESS);
+  const usdt = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDT_ADDRESS);
+  const wusdc = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_WUSDC_ADDRESS);
+  const wusdt = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_WUSDT_ADDRESS);
 
   const { address: connected } = useConnection();
   const fallback = demo.evm.accounts[0]?.address as Address | undefined;
@@ -50,6 +58,8 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
   const [ethBal, setEthBal] = useState<string | undefined>();
   const [wusdcBal, setWusdcBal] = useState<string | undefined>();
   const [wusdtBal, setWusdtBal] = useState<string | undefined>();
+  const [usdcBal, setUsdcBal] = useState<string | undefined>();
+  const [usdtBal, setUsdtBal] = useState<string | undefined>();
   const [adaSrcBal, setAdaSrcBal] = useState<string | undefined>();
   const [adaDestBal, setAdaDestBal] = useState<string | undefined>();
   const [nativeWusdcSrc, setNativeWusdcSrc] = useState<string | undefined>();
@@ -61,6 +71,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
   const [refreshKey, setRefreshKey] = useState(0);
 
   const hasWrapped = Boolean(wusdc || wusdt);
+  const hasUnderlying = Boolean(usdc || usdt);
 
   const load = useCallback(async () => {
     setEvmErr(null);
@@ -93,10 +104,31 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
         setWusdcBal(undefined);
         setWusdtBal(undefined);
       }
+      if (hasUnderlying) {
+        try {
+          const u = await fetchUnderlyingStableBalances({
+            rpcUrl,
+            account,
+            usdc,
+            usdt,
+          });
+          setUsdcBal(u.usdc);
+          setUsdtBal(u.usdt);
+        } catch (e) {
+          setUsdcBal(undefined);
+          setUsdtBal(undefined);
+          setEvmErr(e instanceof Error ? e.message : String(e));
+        }
+      } else {
+        setUsdcBal(undefined);
+        setUsdtBal(undefined);
+      }
     } else {
       setEthBal(undefined);
       setWusdcBal(undefined);
       setWusdtBal(undefined);
+      setUsdcBal(undefined);
+      setUsdtBal(undefined);
     }
 
     const fetchCardanoSide = async (bech32: string) => {
@@ -123,36 +155,53 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
     };
 
     if (yaciBase) {
-      try {
-        if (cardanoSource) {
-          const s = await fetchCardanoSide(cardanoSource);
-          setAdaSrcBal(s.ada);
-          setNativeWusdcSrc(s.wusdc);
-          setNativeWusdtSrc(s.wusdt);
-        } else {
-          setAdaSrcBal(undefined);
-          setNativeWusdcSrc(undefined);
-          setNativeWusdtSrc(undefined);
-        }
-        if (cardanoDest) {
-          const d = await fetchCardanoSide(cardanoDest);
-          setAdaDestBal(d.ada);
-          setNativeWusdcDest(d.wusdc);
-          setNativeWusdtDest(d.wusdt);
-        } else {
-          setAdaDestBal(undefined);
-          setNativeWusdcDest(undefined);
-          setNativeWusdtDest(undefined);
-        }
-        setAdaErr(null);
-      } catch (e) {
+      const clearCardanoBals = () => {
         setAdaSrcBal(undefined);
         setAdaDestBal(undefined);
         setNativeWusdcSrc(undefined);
         setNativeWusdtSrc(undefined);
         setNativeWusdcDest(undefined);
         setNativeWusdtDest(undefined);
-        setAdaErr(e instanceof Error ? e.message : String(e));
+      };
+
+      if (!cardanoSource && !cardanoDest) {
+        clearCardanoBals();
+        setAdaErr(null);
+      } else {
+        const up = await isYaciStoreReachable(yaciBase);
+        if (!up) {
+          clearCardanoBals();
+          setAdaErr(
+            'Yaci Store not reachable (Vite often returns 503 when nothing listens on :8080). Start Yaci on port 8080, or clear VITE_YACI_STORE_URL to hide Cardano balances. See docs/CARDANO_LOCAL_YACI.md.',
+          );
+        } else {
+          try {
+            if (cardanoSource) {
+              const s = await fetchCardanoSide(cardanoSource);
+              setAdaSrcBal(s.ada);
+              setNativeWusdcSrc(s.wusdc);
+              setNativeWusdtSrc(s.wusdt);
+            } else {
+              setAdaSrcBal(undefined);
+              setNativeWusdcSrc(undefined);
+              setNativeWusdtSrc(undefined);
+            }
+            if (cardanoDest) {
+              const d = await fetchCardanoSide(cardanoDest);
+              setAdaDestBal(d.ada);
+              setNativeWusdcDest(d.wusdc);
+              setNativeWusdtDest(d.wusdt);
+            } else {
+              setAdaDestBal(undefined);
+              setNativeWusdcDest(undefined);
+              setNativeWusdtDest(undefined);
+            }
+            setAdaErr(null);
+          } catch (e) {
+            clearCardanoBals();
+            setAdaErr(e instanceof Error ? e.message : String(e));
+          }
+        }
       }
     } else {
       setAdaSrcBal(undefined);
@@ -169,6 +218,9 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
     wusdc,
     wusdt,
     hasWrapped,
+    hasUnderlying,
+    usdc,
+    usdt,
     cardanoSource,
     cardanoDest,
     yaciBase,
@@ -254,34 +306,47 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
           <p className="mt-0.5 font-mono text-[11px] text-slate-600" title={account}>
             Account {evmSubtitle}
           </p>
-          <div className="mt-2 grid grid-cols-3 gap-2">
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
             <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
               <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">ETH</p>
               <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">{fmtBal(ethBal)}</p>
             </div>
             <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">wUSDC</p>
+              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">mUSDC</p>
+              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                {hasUnderlying ? fmtBal(usdcBal) : '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">mUSDT</p>
+              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                {hasUnderlying ? fmtBal(usdtBal) : '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDC</p>
               <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
                 {hasWrapped ? fmtBal(wusdcBal) : '—'}
               </p>
             </div>
-            <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">wUSDT</p>
+            <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm sm:col-span-2 lg:col-span-1">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDT</p>
               <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
                 {hasWrapped ? fmtBal(wusdtBal) : '—'}
               </p>
             </div>
           </div>
-          <p className="mt-2 text-[9px] leading-snug text-slate-600">
-            Relayer intent demo:{' '}
-            <span className="font-mono font-semibold text-slate-800">{fmtBal(demo.demoBalances.usdc)}</span> USDC ·{' '}
-            <span className="font-mono font-semibold text-slate-800">{fmtBal(demo.demoBalances.usdt)}</span> USDT
-          </p>
+          {!hasUnderlying ? (
+            <p className="mt-2 text-[9px] leading-snug text-slate-500">
+              Set <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_USDC_ADDRESS</code> /{' '}
+              <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_USDT_ADDRESS</code> for live mock underlying balances.
+            </p>
+          ) : null}
           {!hasWrapped ? (
             <p className="mt-1.5 text-[9px] leading-snug text-slate-500">
               Set <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_WUSDC_ADDRESS</code> /{' '}
               <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_WUSDT_ADDRESS</code> from the Anvil
-              deploy JSON for wrapped balances.
+              deploy JSON for bridge-minted <span className="font-medium">zkUSDC</span> / <span className="font-medium">zkUSDT</span> balances.
             </p>
           ) : null}
           {evmErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">EVM: {evmErr}</p> : null}
@@ -305,7 +370,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
                 </div>
                 {cardWusdcUnit ? (
                   <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
-                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">wUSDC</p>
+                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDC</p>
                     <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
                       {cardanoSource && yaciBase ? fmtBal(nativeWusdcSrc) : '—'}
                     </p>
@@ -313,7 +378,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
                 ) : null}
                 {cardWusdtUnit ? (
                   <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
-                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">wUSDT</p>
+                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDT</p>
                     <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
                       {cardanoSource && yaciBase ? fmtBal(nativeWusdtSrc) : '—'}
                     </p>
@@ -337,7 +402,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
                   </div>
                   {cardWusdcUnit ? (
                     <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
-                      <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">wUSDC</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDC</p>
                       <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
                         {yaciBase ? fmtBal(nativeWusdcDest) : '—'}
                       </p>
@@ -345,7 +410,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
                   ) : null}
                   {cardWusdtUnit ? (
                     <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
-                      <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">wUSDT</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDT</p>
                       <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
                         {yaciBase ? fmtBal(nativeWusdtDest) : '—'}
                       </p>
@@ -421,7 +486,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
       </div>
 
       <p className="mt-3 text-[9px] leading-snug text-slate-500">
-        Mock USDC/USDT and demo keys are in the table below. wUSDC/wUSDT are minted by the bridge on Anvil.
+        Mock USDC/USDT and demo keys are in the table below. zkUSDC/zkUSDT are proof-gated bridge mints on Anvil (see docs/BRIDGE_SWAP_FLOW.md).
       </p>
     </div>
   );

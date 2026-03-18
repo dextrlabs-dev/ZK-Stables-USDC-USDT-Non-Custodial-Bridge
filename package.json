@@ -9,6 +9,10 @@
     "zk-stables-ui"
   ],
   "scripts": {
+    "fund:cardano-yaci": "node scripts/fund-cardano-demo-from-yaci.mjs",
+    "fund:evm-seed-zk": "sh -c 'cd evm && ADDRS_JSON=\"${ADDRS_JSON:-/tmp/zk-stables-anvil-addrs.json}\" npx hardhat run scripts/seed-wrapped-balances-anvil.js --network anvil'",
+    "fund:local": "npm run fund:cardano-yaci && npm run fund:evm-seed-zk",
+    "test:cardano-local": "./scripts/test-cardano-local.sh",
     "postinstall": "patch-package --patch-dir local-cli/patches && node scripts/postinstall-libsodium.mjs",
     "contract:compact": "npm run compact -w @zk-stables/midnight-contract",
     "contract:build": "npm run build -w @zk-stables/midnight-contract",

@@ -90,7 +90,7 @@ export function effectiveBurnRecipient(body: BurnIntent): string | undefined {
   const evm = relayerBridgeEvmRecipient();
   const ada = relayerBridgeCardanoRecipient();
   if (body.sourceChain === 'evm') return evm;
-  if (body.sourceChain === 'cardano') return ada;
-  if (body.sourceChain === 'midnight') return evm || ada;
+  /** Redeem after burn on Cardano/Midnight: underlying is claimed on EVM only. */
+  if (body.sourceChain === 'cardano' || body.sourceChain === 'midnight') return evm ?? ada;
   return undefined;
 }

@@ -5,6 +5,7 @@ import { demoWalletsEnabled } from '../../demo/constants.js';
 import { fetchAnvilDemoBalances, type AnvilBalanceRow } from '../../lib/anvilDemoBalances.js';
 import type { DemoWalletsResponse } from '../../lib/relayerClient.js';
 import { shortenAddress } from '../../utils/formatAddress.js';
+import { parseEnvEthereumAddress } from '../../utils/envAddress.js';
 
 function copyText(t: string) {
   void navigator.clipboard.writeText(t);
@@ -16,10 +17,10 @@ export const DemoFundedWallets: React.FC<{ demo: DemoWalletsResponse }> = ({ dem
   const mockConnector = useMemo(() => connectors.find((c) => c.id === 'mock'), [connectors]);
 
   const rpcUrl = import.meta.env.VITE_ETH_LOCALHOST_RPC_URL || 'http://127.0.0.1:8545';
-  const usdc = (import.meta.env.VITE_DEMO_USDC_ADDRESS as Address | undefined)?.trim() as Address | undefined;
-  const usdt = (import.meta.env.VITE_DEMO_USDT_ADDRESS as Address | undefined)?.trim() as Address | undefined;
-  const wusdc = (import.meta.env.VITE_DEMO_WUSDC_ADDRESS as Address | undefined)?.trim() as Address | undefined;
-  const wusdt = (import.meta.env.VITE_DEMO_WUSDT_ADDRESS as Address | undefined)?.trim() as Address | undefined;
+  const usdc = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDC_ADDRESS);
+  const usdt = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDT_ADDRESS);
+  const wusdc = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_WUSDC_ADDRESS);
+  const wusdt = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_WUSDT_ADDRESS);
 
   const [rows, setRows] = useState<AnvilBalanceRow[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -92,8 +93,15 @@ export const DemoFundedWallets: React.FC<{ demo: DemoWalletsResponse }> = ({ dem
             Refresh balances
           </button>
           <p className="text-[11px] text-slate-500">
-            Relayer UI balances: <span className="font-mono font-medium text-slate-700">{demo.demoBalances.usdc}</span> USDC ·{' '}
-            <span className="font-mono font-medium text-slate-700">{demo.demoBalances.usdt}</span> USDT (intent demo)
+            Live mUSDC/mUSDT (demo account #0 on RPC):{' '}
+            {rows?.[0] && usdc && usdt ? (
+              <>
+                <span className="font-mono font-medium text-slate-700">{rows[0].usdc ?? '—'}</span> USDC ·{' '}
+                <span className="font-mono font-medium text-slate-700">{rows[0].usdt ?? '—'}</span> USDT
+              </>
+            ) : (
+              <span className="text-slate-400">load the table or set USDC/USDT env addresses</span>
+            )}
           </p>
         </div>
 

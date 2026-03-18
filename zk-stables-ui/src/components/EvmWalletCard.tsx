@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import {
   Alert,
   Box,
@@ -11,11 +11,12 @@ import {
   Typography,
 } from '@mui/material';
 import { useConnect, useConnection, useDisconnect, useSwitchChain } from 'wagmi';
+import { hardhat } from 'viem/chains';
 import { wagmiConfig } from '../config/wagmi.js';
 import { demoWalletsEnabled } from '../demo/constants.js';
 
 export const EvmWalletCard: React.FC = () => {
-  const { address, chain, isConnected, status } = useConnection();
+  const { address, chain, connector, isConnected, status } = useConnection();
   const { disconnect } = useDisconnect();
   const { connectors, connect, isPending: isConnectPending, error: connectError } = useConnect();
   const mockConnector = connectors.find((c) => c.id === 'mock');
@@ -26,6 +27,11 @@ export const EvmWalletCard: React.FC = () => {
     if (c) connect({ connector: c });
   }, [connect, connectors]);
 
+  useEffect(() => {
+    if (connector?.id !== 'mock' || chain?.id === hardhat.id) return;
+    switchChain({ chainId: hardhat.id });
+  }, [chain?.id, connector?.id, switchChain]);
+
   return (
     <Card id="panel-evm" variant="outlined">
       <CardContent>
@@ -35,7 +41,7 @@ export const EvmWalletCard: React.FC = () => {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Connect a browser wallet to sign EVM lock and unlock transactions against pool contracts. For local dev, run{' '}
           <code>./scripts/anvil-docker.sh</code> (RPC <code>http://127.0.0.1:8545</code>, chain id <strong>31337</strong>),
-          then in this UI switch to <strong>Localhost</strong> and use a test account.
+          then in this UI switch to <strong>Hardhat</strong> (chain 31337) and use a test account.
         </Typography>
         {connectError && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -65,7 +71,7 @@ export const EvmWalletCard: React.FC = () => {
               variant="outlined"
               color="secondary"
               disabled={isConnected || isConnectPending}
-              onClick={() => connect({ connector: mockConnector })}
+              onClick={() => connect({ connector: mockConnector, chainId: hardhat.id })}
             >
               Use Anvil demo account
             </Button>
@@ -74,6 +80,11 @@ export const EvmWalletCard: React.FC = () => {
             Disconnect
           </Button>
         </Stack>
+        {isConnected && connector?.id === 'mock' && (
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+            Anvil demo mode signs via your local RPC only — stay on <strong>Hardhat (31337)</strong>. Use MetaMask for Sepolia.
+          </Typography>
+        )}
         {isConnected && (
           <TextField
             select
@@ -87,7 +98,10 @@ export const EvmWalletCard: React.FC = () => {
               if (!Number.isNaN(id)) switchChain({ chainId: id });
             }}
           >
-            {wagmiConfig.chains.map((c) => (
+            {(connector?.id === 'mock'
+              ? wagmiConfig.chains.filter((c) => c.id === hardhat.id)
+              : wagmiConfig.chains
+            ).map((c) => (
               <MenuItem key={c.id} value={c.id}>
                 {c.name} ({c.id})
               </MenuItem>

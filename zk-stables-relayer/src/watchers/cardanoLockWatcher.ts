@@ -10,9 +10,11 @@ import {
   relayerBridgeMidnightRecipient,
 } from '../config/bridgeRecipients.js';
 import { enqueueLockIntent } from '../pipeline/runJob.js';
+import type { LockIntent } from '../types.js';
 import { cardanoUtxoDedupeKey, isCardanoUtxoInflightOrDone } from '../store.js';
 import { cardanoIndexerMode, blockfrostNetwork, blockfrostProjectId, resolveYaciBaseUrl } from '../adapters/cardanoIndexer.js';
 import { yaciAddressUtxos, yaciTx } from '../adapters/cardanoYaci.js';
+import { tryParseLockDatumFromInlineHex } from './inlineLockDatumParse.js';
 
 /**
  * Poll UTxOs at `RELAYER_CARDANO_LOCK_ADDRESS` via Yaci Store or Blockfrost (Yaci wins when
@@ -69,7 +71,19 @@ export async function runCardanoLockWatcher(logger: Logger): Promise<void> {
         const split = primary
           ? splitBlockfrostUnit(primary.unit)
           : { policyIdHex: '', assetNameHex: '' };
-        const amountStr = primary?.quantity ?? ada?.quantity ?? '0';
+        const amountFromUtxo = primary?.quantity ?? ada?.quantity ?? '0';
+        const parsedDatum = tryParseLockDatumFromInlineHex(u.inline_datum);
+        const amountStr = parsedDatum?.amountStr ?? amountFromUtxo;
+
+        const cardanoSource: NonNullable<LockIntent['source']>['cardano'] = {
+          txHash: u.tx_hash,
+          outputIndex: u.output_index,
+          blockHeight: String(bh),
+          scriptHash: process.env.RELAYER_CARDANO_LOCK_SCRIPT_HASH,
+          policyIdHex: split.policyIdHex || undefined,
+          assetNameHex: split.assetNameHex || undefined,
+          ...(parsedDatum ? { lockNonce: parsedDatum.lockNonce } : {}),
+        };
 
         const intent = {
           operation: 'LOCK' as const,
@@ -80,14 +94,7 @@ export async function runCardanoLockWatcher(logger: Logger): Promise<void> {
           amount: amountStr,
           recipient,
           source: {
-            cardano: {
-              txHash: u.tx_hash,
-              outputIndex: u.output_index,
-              blockHeight: String(bh),
-              scriptHash: process.env.RELAYER_CARDANO_LOCK_SCRIPT_HASH,
-              policyIdHex: split.policyIdHex || undefined,
-              assetNameHex: split.assetNameHex || undefined,
-            },
+            cardano: cardanoSource,
           },
           note: JSON.stringify({
             data_hash: u.data_hash ?? null,

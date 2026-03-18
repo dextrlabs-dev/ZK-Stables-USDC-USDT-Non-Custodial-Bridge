@@ -94,6 +94,19 @@ export type BurnIntent = {
       policyIdHex?: string;
       assetNameHex?: string;
       lockNonce?: string;
+      /** Set when the lock UTxO was already spent via user `BridgeRelease` (indexer cannot return unspent UTxO). */
+      spendTxHash?: string;
+    };
+    midnight?: {
+      /** Transaction identifier after `initiateBurn` (hex, with or without 0x). */
+      txId?: string;
+      /** Optional 32-byte tx hash string for explorers. */
+      txHash?: string;
+      contractAddress?: string;
+      /** `initiateBurn` public argument `destChain` (uint32). */
+      destChainId?: number;
+      /** Optional echo of lock nonce for deposit commitment (decimal string). */
+      lockNonce?: string;
     };
   };
   /** Optional echo of connected wallets (UI); recipient must still be a source-chain address, not Midnight. */

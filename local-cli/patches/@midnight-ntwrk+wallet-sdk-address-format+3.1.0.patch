@@ -1,0 +1,68 @@
+diff --git a/node_modules/@midnight-ntwrk/wallet-sdk-address-format/dist/index.js b/node_modules/@midnight-ntwrk/wallet-sdk-address-format/dist/index.js
+index 056457d..ffacc78 100644
+--- a/node_modules/@midnight-ntwrk/wallet-sdk-address-format/dist/index.js
++++ b/node_modules/@midnight-ntwrk/wallet-sdk-address-format/dist/index.js
+@@ -123,13 +123,12 @@ export class ShieldedAddress {
+         const encryptionPublicKey = new ShieldedEncryptionPublicKey(bytes.subarray(ShieldedCoinPublicKey.keyLength));
+         return new ShieldedAddress(coinPublicKey, encryptionPublicKey);
+     });
+-    static [Bech32mSymbol] = ShieldedAddress.codec;
+-    [Bech32mSymbol] = ShieldedAddress.codec;
+     coinPublicKey;
+     encryptionPublicKey;
+     constructor(coinPublicKey, encryptionPublicKey) {
+         this.encryptionPublicKey = encryptionPublicKey;
+         this.coinPublicKey = coinPublicKey;
++        this[Bech32mSymbol] = ShieldedAddress.codec;
+     }
+     coinPublicKeyString() {
+         return this.coinPublicKey.data.toString('hex');
+@@ -141,6 +140,7 @@ export class ShieldedAddress {
+         return this.coinPublicKey.equals(other.coinPublicKey) && this.encryptionPublicKey.equals(other.encryptionPublicKey);
+     }
+ }
++ShieldedAddress[Bech32mSymbol] = ShieldedAddress.codec;
+ export class ShieldedEncryptionSecretKey {
+     static codec = new Bech32mCodec('shield-esk', (esk) => Buffer.from(esk.zswap.yesIKnowTheSecurityImplicationsOfThis_serialize()), (repr) => new ShieldedEncryptionSecretKey(EncryptionSecretKey.deserialize(repr)));
+     // There are some bits in serialization of field elements and elliptic curve points, that are hard to replicate
+@@ -193,13 +193,12 @@ export class UnshieldedAddress {
+     data;
+     static keyLength = 32;
+     static codec = new Bech32mCodec('addr', (addr) => addr.data, (repr) => new UnshieldedAddress(repr));
+-    static [Bech32mSymbol] = UnshieldedAddress.codec;
+-    [Bech32mSymbol] = UnshieldedAddress.codec;
+     constructor(data) {
+         if (data.length != UnshieldedAddress.keyLength) {
+             throw new Error('Unshielded address needs to be 32 bytes long');
+         }
+         this.data = data;
++        this[Bech32mSymbol] = UnshieldedAddress.codec;
+     }
+     get hexString() {
+         return this.data.toString('hex');
+@@ -209,11 +208,10 @@ export class UnshieldedAddress {
+         return otherAddress.data.equals(this.data);
+     }
+ }
++UnshieldedAddress[Bech32mSymbol] = UnshieldedAddress.codec;
+ export class DustAddress {
+     data;
+     static codec = new Bech32mCodec('dust', (daddr) => daddr.serialize(), (repr) => new DustAddress(ScaleBigInt.decode(repr)));
+-    static [Bech32mSymbol] = DustAddress.codec;
+-    [Bech32mSymbol] = DustAddress.codec;
+     static encodePublicKey = (networkId, publicKey) => {
+         return DustAddress.codec.encode(networkId, new DustAddress(publicKey)).asString();
+     };
+@@ -222,6 +220,7 @@ export class DustAddress {
+             throw new Error('Dust address is too large');
+         }
+         this.data = data;
++        this[Bech32mSymbol] = DustAddress.codec;
+     }
+     serialize() {
+         return ScaleBigInt.encode(this.data);
+@@ -231,3 +230,4 @@ export class DustAddress {
+         return otherAddress === this.data;
+     }
+ }
++DustAddress[Bech32mSymbol] = DustAddress.codec;

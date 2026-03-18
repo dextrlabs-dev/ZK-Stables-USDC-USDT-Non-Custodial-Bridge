@@ -1,8 +1,8 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 
-describe('ZkStablesWrappedToken burn (mUSDC / mUSDT) + burnCommitment', () => {
-  it('mints mock wUSDC via bridge then burn emits Burned with burnCommitment', async () => {
+describe('ZkStablesWrappedToken burn (zkUSDC / zkUSDT) + burnCommitment', () => {
+  it('mints zkUSDC via bridge then burn emits Burned with burnCommitment', async () => {
     const [, user] = await ethers.getSigners();
 
     const Verifier = await ethers.getContractFactory('BridgeVerifierMock');
@@ -14,7 +14,7 @@ describe('ZkStablesWrappedToken burn (mUSDC / mUSDT) + burnCommitment', () => {
     await bridgeMint.waitForDeployment();
 
     const Wrapped = await ethers.getContractFactory('ZkStablesWrappedToken');
-    const wUSDC = await Wrapped.deploy('Wrapped USDC', 'wUSDC', 6, await bridgeMint.getAddress());
+    const wUSDC = await Wrapped.deploy('ZK USDC', 'zkUSDC', 6, await bridgeMint.getAddress());
     await wUSDC.waitForDeployment();
 
     const mintNonce = ethers.id('mint-nonce-test');

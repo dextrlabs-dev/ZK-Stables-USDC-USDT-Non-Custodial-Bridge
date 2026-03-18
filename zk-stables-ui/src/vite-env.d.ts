@@ -14,7 +14,7 @@ interface ImportMetaEnv {
   /** Mock underlying ERC-20 from `deploy-anvil.js` (`usdc` / `usdt`). */
   readonly VITE_DEMO_USDC_ADDRESS?: string;
   readonly VITE_DEMO_USDT_ADDRESS?: string;
-  /** Wrapped bridge tokens (`wUSDC` / `wUSDT` from deploy) for balance display. */
+  /** Bridge-minted zk stables (`zkUSDC` / `zkUSDT` on-chain; env keys still VITE_DEMO_WUSDC_* from deploy JSON). */
   readonly VITE_DEMO_WUSDC_ADDRESS?: string;
   readonly VITE_DEMO_WUSDT_ADDRESS?: string;
   /**
@@ -27,6 +27,12 @@ interface ImportMetaEnv {
   readonly VITE_CARDANO_WUSDT_UNIT?: string;
   /** Decimals for native Cardano bridge token display (default 6). */
   readonly VITE_CARDANO_NATIVE_DECIMALS?: string;
+  /** 64 hex chars; default 64×0 for browser lock datum `recipient_commitment`. */
+  readonly VITE_CARDANO_LOCK_RECIPIENT_COMMITMENT_HEX?: string;
+  /** ZK deposit encoding: Cardano source chain id (align with RELAYER_ZK_SOURCE_CHAIN_ID). */
+  readonly VITE_ZK_SOURCE_CHAIN_ID?: string;
+  /** ZK deposit encoding: EVM destination chain id (align with RELAYER_ZK_DEST_CHAIN_ID). */
+  readonly VITE_ZK_DEST_CHAIN_ID?: string;
 }
 
 interface ImportMeta {
@@ -36,4 +42,9 @@ interface ImportMeta {
 /** CIP-30 injected wallets (Eternl, Nami, Lace Cardano, etc.). */
 interface Window {
   cardano?: Record<string, { enable?: () => Promise<unknown> }>;
+}
+
+declare module 'process/browser' {
+  const process: NodeJS.Process;
+  export default process;
 }

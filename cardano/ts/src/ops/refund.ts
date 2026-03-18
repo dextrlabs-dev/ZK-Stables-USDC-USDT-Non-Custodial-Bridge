@@ -8,7 +8,6 @@ import type { LockSpendParams } from '../params.js';
 /** Depositor refunds the locked UTxO (`UserRefund` + depositor must sign). */
 export async function submitRefund(ctx: BridgeContext, p: LockSpendParams): Promise<{ txHash: string }> {
   const { scriptCbor } = getLockPoolScript(ctx.blueprint, ctx.networkId);
-  const datum = buildLockDatum(p);
   const signerHash = p.depositorVkeyHashHex56;
 
   const scriptUtxo = await fetchUtxo(ctx.fetcher, p.lockTxHash, p.lockOutputIndex);
@@ -23,7 +22,7 @@ export async function submitRefund(ctx: BridgeContext, p: LockSpendParams): Prom
   const refundAddress = process.env.LOCK_REFUND_TO_ADDRESS ?? walletUsed;
 
   const txBuilder = getTxBuilder(ctx);
-  await txBuilder
+  const step = txBuilder
     .spendingPlutusScript('V3')
     .txIn(
       scriptUtxo.input.txHash,
@@ -32,8 +31,11 @@ export async function submitRefund(ctx: BridgeContext, p: LockSpendParams): Prom
       scriptUtxo.output.address,
     )
     .txInScript(scriptCbor)
-    .txInRedeemerValue(redeemerUserRefund)
-    .txInDatumValue(datum)
+    .txInRedeemerValue(redeemerUserRefund);
+  // Hash-locked outputs (CLI lock): witness datum. Inline outputs (relayer mint+lock): Conway forbids duplicate supplemental datums.
+  if (scriptUtxo.output.plutusData) step.txInInlineDatumPresent();
+  else step.txInDatumValue(buildLockDatum(p));
+  await step
     .requiredSignerHash(signerHash)
     .txOut(refundAddress, scriptUtxo.output.amount)
     .changeAddress(walletUsed)

@@ -4,12 +4,13 @@ SRS deployments: set **`RELAYER_SRS_STRICT=true`** and satisfy [docs/SRS_RELAYER
 
 Implements the **architecture blueprint** control flow:
 
-1. **Ingest** — `POST /v1/intents/lock` / `POST /v1/intents/burn`, or watchers that read **EVM** `Locked` / `Burned` logs.
+1. **Ingest** — `POST /v1/intents/lock` (**`sourceChain` must be `evm`** for HTTP mint) / `POST /v1/intents/burn`, or watchers that read **EVM** `Locked` / `Burned` logs (and Cardano lock UTxOs when the Cardano watcher is enabled).
 2. **Await finality** — if `intent.source.evm.blockNumber` is set, waits `RELAYER_EVM_CONFIRMATIONS` blocks; if `intent.source.cardano.blockHeight` is set and **Yaci Store** (`RELAYER_YACI_URL` or `YACI_URL`) or **Blockfrost** is configured, waits `RELAYER_CARDANO_CONFIRMATIONS` blocks (tip from Yaci or Blockfrost respectively; **Yaci wins** when its URL is set); otherwise a simulated delay (`RELAYER_FINALITY_MS_*`).
 3. **Prove** — **`merkle-inclusion-v1`** when EVM `txHash` + `logIndex` are known: Merkle tree over all logs in that tx (OpenZeppelin-style `MerkleProof` + `merkletreejs`, see [`../zk/README.md`](../zk/README.md)). For Cardano-anchored intents, **`stub-sha256-v1`** augments JSON with `eventCommitmentHex` / `depositCommitmentHex` per [`../contract/docs/DEPOSIT_COMMITMENT_ENCODING.md`](../contract/docs/DEPOSIT_COMMITMENT_ENCODING.md). Otherwise stub digest is intent-only.
 4. **Destination** — on-chain settlement when the corresponding env vars are set (required under `RELAYER_SRS_STRICT`):
    - **LOCK → EVM**: `ZkStablesBridgeMint.mintWrapped` (`RELAYER_EVM_BRIDGE_MINT`, `RELAYER_EVM_WRAPPED_TOKEN`, `RELAYER_EVM_PRIVATE_KEY`). Amount uses `RELAYER_EVM_TOKEN_DECIMALS` (default 6). `nonce` defaults to the stub **proof digest** (bytes32) if `intent.source.evm.nonce` is omitted.
-   - **BURN → EVM recipient** (`0x…`): `unlockWithInclusionProof` on `RELAYER_EVM_POOL_LOCK` when Merkle proof + pool env are present.
+   - **BURN → EVM recipient** (`0x…`): `unlockWithInclusionProof` on `RELAYER_EVM_POOL_LOCK` when the burn source is **EVM** and Merkle proof + pool env are present.
+   - **BURN (Cardano or Midnight source) → EVM recipient** (`0x…`): operator `unlock` on `RELAYER_EVM_POOL_LOCK` using `burnCommitmentHex` as `burnNonce`, with underlying from `RELAYER_EVM_UNDERLYING_TOKEN` / `RELAYER_EVM_UNDERLYING_TOKEN_USDT` per asset.
    - **LOCK → Cardano** or **BURN → Cardano** (`addr1…` / `addr_test1…`): **Aiken `lock_pool`** (`cardano/aiken`, `plutus.json` via `RELAYER_CARDANO_PLUTUS_JSON` or default path) — **mint** native asset (Mesh `ForgeScript` + [mint](https://meshjs.dev/apis/txbuilder/minting)), **lock** at script with `LockDatum`, then **`BridgeRelease`** to the recipient (two txs). **BURN** with **Cardano source** and non-Cardano destination: **`BridgeRelease`** on `intent.source.cardano` (`txHash` / `outputIndex`); payout bech32 is `intent.recipient` when Cardano, else `RELAYER_BRIDGE_CARDANO_RECIPIENT` or `RELAYER_CARDANO_RELEASE_PAYOUT_ADDRESS`. Bridge wallet needs **collateral** for Plutus spends.
    - **LOCK → Midnight**: `RELAYER_MIDNIGHT_ENABLED` — relayer runs `proveHolder` + `mintWrappedUnshielded` (see `src/midnight/service.ts`).
 
@@ -17,7 +18,7 @@ Implements the **architecture blueprint** control flow:
 
 Also available:
 
-- EVM lock watcher (`RELAYER_EVM_LOCK_ADDRESS`) and burn watcher (`RELAYER_EVM_WRAPPED_TOKEN`).
+- EVM lock watcher (`RELAYER_EVM_LOCK_ADDRESS`) and burn watcher (`RELAYER_EVM_WRAPPED_TOKEN`, or dual `RELAYER_EVM_WRAPPED_TOKEN_USDC` / `RELAYER_EVM_WRAPPED_TOKEN_USDT`).
 - Cardano health via **Yaci Store** or **Blockfrost**; Cardano lock watcher (`RELAYER_CARDANO_WATCHER_ENABLED`, `RELAYER_CARDANO_LOCK_ADDRESS`) ingesting UTxOs into `source.cardano` with matching finality waits (Yaci-only for Cardano when `RELAYER_YACI_URL` or `YACI_URL` is set). Local Yaci + funded wallet: [docs/CARDANO_LOCAL_YACI.md](../docs/CARDANO_LOCAL_YACI.md) and `scripts/relayer-cardano-srs.env.sh`.
 - Midnight indexer ping for health.
 
@@ -80,7 +81,10 @@ See [`../scripts/README-local-evm.md`](../scripts/README-local-evm.md).
 | `RELAYER_ZK_SOURCE_CHAIN_ID` / `RELAYER_ZK_DEST_CHAIN_ID` | `0` | UInt32 chain ids in stub `depositCommitment` preimage |
 | `RELAYER_EVM_LOCK_ADDRESS` | _(unset)_ | Pool lock contract emitting `Locked` (watcher) |
 | `RELAYER_EVM_WRAPPED_TOKEN` | _(unset)_ | Wrapped token emitting `Burned` (burn watcher) |
-| `RELAYER_EVM_BURN_ASSET` | `USDC` | `USDC` or `USDT` — sets `asset` / `assetKind` on watcher-enqueued burn jobs (pair with `wUSDC` vs `wUSDT` token address) |
+| `RELAYER_EVM_WRAPPED_TOKEN_USDC` / `RELAYER_EVM_WRAPPED_TOKEN_USDT` | _(unset)_ | Optional second watcher address when both zk tokens are deployed |
+| `RELAYER_EVM_BURN_ASSET` | `USDC` | `USDC` or `USDT` — sets `asset` / `assetKind` on watcher-enqueued burn jobs when using **only** `RELAYER_EVM_WRAPPED_TOKEN` |
+| `RELAYER_CARDANO_OPERATOR_BURN_RELEASE` | _(false)_ | If `true`, relayer may submit operator `BridgeRelease` for Cardano-sourced BURN |
+| `RELAYER_CARDANO_DESTINATION_LOCK_HOLD` | _(false)_ | If `true`, LOCK→Cardano stops after mint+lock (recipient-only datum for user `BridgeRelease`) |
 | `RELAYER_EVM_POOL_LOCK` | _(unset)_ | Pool to call `unlockWithInclusionProof` after burn proof |
 | `RELAYER_EVM_UNDERLYING_TOKEN` | _(unset)_ | Underlying ERC-20 released on unlock (e.g. mUSDC) |
 | `RELAYER_EVM_TOKEN_DECIMALS` | `6` | Parse `intent.amount` for mint/unlock (stablecoin-style) |
@@ -94,6 +98,8 @@ See [`../scripts/README-local-evm.md`](../scripts/README-local-evm.md).
 | `RELAYER_CARDANO_ASSET_DECIMALS` | `6` | Decimals when interpreting `intent.amount` |
 | `RELAYER_CARDANO_MINT_TOKEN_NAME` | _(unset)_ | Override ASCII token name for WUSDC/WUSDT mint (default from `intent.asset`) |
 | `RELAYER_CARDANO_MINT_OUTPUT_LOVELACE` | `2000000` | Min lovelace in the lock output carrying minted assets |
+| `RELAYER_CARDANO_LOCK_UTXO_WAIT_MS` | `90000` | After lock tx submit, poll Yaci Store / indexer until the script UTxO appears (avoids immediate “Could not find lock UTxO” on indexer lag) |
+| `RELAYER_CARDANO_LOCK_UTXO_POLL_MS` | `500` | Delay between polls while waiting for the lock UTxO at the script address |
 | `RELAYER_CARDANO_RECIPIENT_COMMITMENT_HEX` | _(derived)_ | Optional 64-hex `recipient_commitment` in `LockDatum`; default SHA-256 of `lockRef:proofDigest` |
 | `RELAYER_CARDANO_LOCK_SOURCE_CHAIN_ID` / `RELAYER_CARDANO_LOCK_DEST_CHAIN_ID` | `0` | `source_chain_id` / `destination_chain_id` in `LockDatum` |
 | `RELAYER_CARDANO_LOCK_NONCE` | `0` | `lock_nonce` in `LockDatum` |
@@ -113,6 +119,7 @@ Copy `.env.example` to `.env` and set your project id locally — **do not commi
 - `GET /health` — liveness
 - `GET /v1/health/chains` — optional EVM + Midnight indexer checks (+ `relayerBridge` configured flags)
 - `GET /v1/bridge/recipients` — configured `RELAYER_BRIDGE_*` addresses (dev convenience; protect in production)
+- `GET /v1/cardano/bridge-metadata` — lock pool script CBOR + address for Mesh in the browser
 - `POST /v1/intents/lock` — enqueue lock intent (body: `LockIntent`)
 - `POST /v1/intents/burn` — enqueue burn intent (body: `BurnIntent`)
 - `GET /v1/jobs` — list jobs (memory; dev only)
@@ -120,4 +127,4 @@ Copy `.env.example` to `.env` and set your project id locally — **do not commi
 
 ## Web UI
 
-Set `VITE_RELAYER_URL=http://127.0.0.1:8787` in `zk-stables-ui` and use **Submit to relayer** on the cross-chain intent card.
+Set `VITE_RELAYER_URL=http://127.0.0.1:8787` in `zk-stables-ui` and use **Submit to relayer** on the cross-chain intent card. For Cardano redeem in the browser, also set `VITE_YACI_URL` or `VITE_BLOCKFROST_PROJECT_ID` (same indexer as the relayer).

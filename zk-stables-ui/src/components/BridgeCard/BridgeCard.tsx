@@ -59,7 +59,7 @@ export const BridgeCard: React.FC = () => {
 
   const refreshHistory = useCallback(async () => {
     const jobs = await listRelayerJobs(relayerUrl);
-    setHistory(jobs.slice(0, 25));
+    setHistory(Array.isArray(jobs) ? jobs.slice(0, 25) : []);
   }, [relayerUrl]);
 
   useEffect(() => {
@@ -196,7 +196,12 @@ export const BridgeCard: React.FC = () => {
                 logEntries.length > 0
                   ? logEntries
                       .slice(0, 3)
-                      .map((e) => `${e.label.split('·').pop()?.trim() ?? e.label}: ${e.display.slice(0, 18)}${e.display.length > 18 ? '…' : ''}`)
+                      .map((e) => {
+                        const disp =
+                          typeof e.display === 'string' ? e.display : String(e.display ?? '');
+                        const short = disp.length > 18 ? `${disp.slice(0, 18)}…` : disp;
+                        return `${e.label.split('·').pop()?.trim() ?? e.label}: ${short}`;
+                      })
                       .join(' · ')
                   : null;
               return (
@@ -217,10 +222,10 @@ export const BridgeCard: React.FC = () => {
                           ) : (
                             <p className="mt-1.5 text-[10px] text-slate-400">Expand for pipeline and full tx log</p>
                           )}
-                          {j.error ? (
+                          {j.error != null && String(j.error).length > 0 ? (
                             <p className="mt-1 text-[11px] text-red-600">
-                              {j.error.slice(0, 120)}
-                              {j.error.length > 120 ? '…' : ''}
+                              {String(j.error).slice(0, 120)}
+                              {String(j.error).length > 120 ? '…' : ''}
                             </p>
                           ) : null}
                         </div>

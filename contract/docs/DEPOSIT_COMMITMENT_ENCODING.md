@@ -110,6 +110,21 @@ event_commitment = H(
 )
 ```
 
+**Midnight (`initiateBurn` — holder exit)**
+
+After the holder calls `initiateBurn(destChain, recipientComm)` on the zk-stables Compact contract, the relayer binds the burn to a Midnight transaction id:
+
+```
+event_commitment = H(
+  "ZKStables:Midnight:Burn:v1" ||
+  uint32_be(dest_chain_id) ||
+  bytes32(recipient_comm) ||
+  bytes32(midnight_tx_id)
+)
+```
+
+(`recipient_comm` is the same 32 bytes as UI/relayer `burnCommitmentHex`.)
+
 ## Integration with Compact
 
 - [`zk-stables.compact`](../src/zk-stables.compact) stores **`depositCommitment`** as `Bytes<32>` at deploy time; the **DApp must pass** the same bytes produced by this spec after off-chain verification.

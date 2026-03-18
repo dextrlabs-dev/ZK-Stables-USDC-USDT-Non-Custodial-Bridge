@@ -20,7 +20,13 @@ import { Buffer } from 'buffer';
 
 const INDEXER_PORT = Number.parseInt(process.env.INDEXER_PORT ?? '8088', 10);
 const NODE_PORT = Number.parseInt(process.env.NODE_PORT ?? '9944', 10);
-const PROOF_SERVER_PORT = Number.parseInt(process.env.PROOF_SERVER_PORT ?? '6300', 10);
+
+function provingServerUrl(): URL {
+  const fromRelayer = process.env.RELAYER_MIDNIGHT_PROOF_SERVER?.replace(/\/$/, '');
+  if (fromRelayer) return new URL(fromRelayer);
+  const port = Number.parseInt(process.env.PROOF_SERVER_PORT ?? '6300', 10);
+  return new URL(`http://127.0.0.1:${port}`);
+}
 
 const INDEXER_HTTP_URL = `http://127.0.0.1:${INDEXER_PORT}/api/v4/graphql`;
 const INDEXER_WS_URL = `ws://127.0.0.1:${INDEXER_PORT}/api/v4/graphql/ws`;
@@ -83,7 +89,7 @@ export async function initWalletWithSeed(seed: Buffer): Promise<WalletContext> {
     configuration: {
       ...baseConfiguration,
       relayURL: new URL(`ws://127.0.0.1:${NODE_PORT}`),
-      provingServerUrl: new URL(`http://127.0.0.1:${PROOF_SERVER_PORT}`),
+      provingServerUrl: provingServerUrl(),
       txHistoryStorage: new InMemoryTransactionHistoryStorage(),
     },
     shielded: async () => shieldedWallet,

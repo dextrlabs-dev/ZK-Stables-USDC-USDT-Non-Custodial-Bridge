@@ -13,7 +13,7 @@ import {
   Typography,
 } from '@mui/material';
 import { useConnect, useConnection, useDisconnect, useSwitchChain } from 'wagmi';
-import { localhost } from 'viem/chains';
+import { hardhat } from 'viem/chains';
 import { useCrossChainWallets } from '../contexts/CrossChainWalletContext.js';
 import { useZkStables } from '../hooks/useZkStables.js';
 import {
@@ -43,7 +43,7 @@ export const DemoWalletsPanel: React.FC = () => {
   const mockConnector = useMemo(() => connectors.find((c) => c.id === 'mock'), [connectors]);
 
   const loadAllDemos = useCallback(() => {
-    if (mockConnector) connect({ connector: mockConnector });
+    if (mockConnector) connect({ connector: mockConnector, chainId: hardhat.id });
     applyDemoCardano();
   }, [applyDemoCardano, connect, mockConnector]);
 
@@ -72,7 +72,11 @@ export const DemoWalletsPanel: React.FC = () => {
           <Button variant="contained" color="primary" disabled={evmBusy || !mockConnector} onClick={loadAllDemos}>
             Load EVM + Cardano test rows
           </Button>
-          <Button variant="outlined" disabled={evmBusy} onClick={() => mockConnector && connect({ connector: mockConnector })}>
+          <Button
+            variant="outlined"
+            disabled={evmBusy}
+            onClick={() => mockConnector && connect({ connector: mockConnector, chainId: hardhat.id })}
+          >
             EVM test accounts only
           </Button>
           <Button variant="outlined" onClick={applyDemoCardano}>
@@ -82,8 +86,8 @@ export const DemoWalletsPanel: React.FC = () => {
             Clear EVM and Cardano test rows
           </Button>
           {isConnected && (
-            <Button variant="text" size="small" onClick={() => switchChain({ chainId: localhost.id })}>
-              Point EVM wallet at Localhost (8545)
+            <Button variant="text" size="small" onClick={() => switchChain({ chainId: hardhat.id })}>
+              Point EVM wallet at Hardhat local (31337, 8545)
             </Button>
           )}
         </Stack>

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 
 const CARDANO_LOCK_DOMAIN = Buffer.from('ZKStables:Cardano:Lock:v1', 'utf8');
 const CARDANO_BURN_DOMAIN = Buffer.from('ZKStables:Cardano:Burn:v1', 'utf8');
+const MIDNIGHT_BURN_DOMAIN = Buffer.from('ZKStables:Midnight:Burn:v1', 'utf8');
 const DEPOSIT_DOMAIN = Buffer.from('ZKStables:Deposit:v1', 'utf8');
 
 function hexToBytes(hex: string): Buffer {
@@ -90,6 +91,30 @@ export function computeCardanoBurnEventCommitmentDigest(params: {
     u32be(params.outputIndex),
     bc,
   ]);
+  return createHash('sha256').update(preimage).digest();
+}
+
+/**
+ * Inner `event_commitment` for Midnight `initiateBurn` (holder sets `recipientCommitment` = `burnCommitmentHex`).
+ * Binds destination chain id, the 32-byte recipient commitment, and the Midnight transaction id bytes.
+ */
+export function computeMidnightBurnEventCommitmentDigest(params: {
+  destChainId: number;
+  recipientCommHex: string;
+  midnightTxIdHex: string;
+}): Buffer {
+  const h = params.recipientCommHex.replace(/^0x/i, '').trim().toLowerCase();
+  if (h.length !== 64 || !/^[0-9a-f]+$/u.test(h)) {
+    throw new Error('recipientCommHex must be 64 hex chars');
+  }
+  const bc = hexToBytes(h);
+  let txRaw = hexToBytes(params.midnightTxIdHex.replace(/^0x/i, '').trim());
+  if (txRaw.length > 32) txRaw = txRaw.subarray(txRaw.length - 32);
+  if (txRaw.length < 32) {
+    const pad = Buffer.alloc(32 - txRaw.length, 0);
+    txRaw = Buffer.concat([pad, txRaw]);
+  }
+  const preimage = Buffer.concat([MIDNIGHT_BURN_DOMAIN, u32be(params.destChainId >>> 0), bc, txRaw]);
   return createHash('sha256').update(preimage).digest();
 }
 

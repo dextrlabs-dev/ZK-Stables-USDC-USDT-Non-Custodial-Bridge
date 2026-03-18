@@ -10,13 +10,15 @@ if (root) {
     '<p style="font-family:system-ui,sans-serif;padding:2rem;margin:0;color:#64748b;background:#f8fafc">Loading app shell…</p>';
 }
 
-import('./bootstrap.js')
+import('./bootstrap')
   .then(({ mount }) => {
     mount();
   })
   .catch((err) => {
-    console.error(err);
+    console.error('bootstrap import failed', err);
     if (root) {
-      root.innerHTML = `<p style="font-family:system-ui,sans-serif;padding:2rem;color:#b91c1c;background:#f8fafc">Failed to load app: ${String(err?.message ?? err)}</p>`;
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error && err.stack ? `\n\n${err.stack}` : '';
+      root.innerHTML = `<p style="font-family:system-ui,sans-serif;padding:2rem;color:#b91c1c;background:#f8fafc;white-space:pre-wrap;word-break:break-word">Failed to load app: ${msg}${stack}</p>`;
     }
   });

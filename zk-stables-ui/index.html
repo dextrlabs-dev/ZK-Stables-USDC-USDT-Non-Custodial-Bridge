@@ -12,7 +12,51 @@
     />
   </head>
   <body>
+    <!-- Runs before any module: avoids stale SW / Cache Storage pointing at old Vite pre-bundle chunks (chunk-*.js 404 → bootstrap import fails). -->
+    <script>
+      (function () {
+        var h = location.hostname;
+        var clearSw = /[?&]clear-sw=1(?:&|$)/.test(location.search);
+        if (!clearSw && h !== 'localhost' && h !== '127.0.0.1') return;
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function (rs) {
+            rs.forEach(function (r) {
+              r.unregister();
+            });
+          });
+        }
+        if ('caches' in window) {
+          caches.keys().then(function (ks) {
+            ks.forEach(function (k) {
+              caches.delete(k);
+            });
+          });
+        }
+        if (clearSw && history.replaceState) {
+          var u = new URL(location.href);
+          u.searchParams.delete('clear-sw');
+          history.replaceState(null, '', u.pathname + u.search + u.hash);
+        }
+      })();
+    </script>
     <div id="root"></div>
+    <!-- Vendor (TLA) can evaluate before bundled globals runs; readable-stream needs globalThis.process.nextTick. -->
+    <script>
+      (function () {
+        if (globalThis.process != null) return;
+        globalThis.process = {
+          browser: true,
+          version: 'v20.0.0',
+          env: {},
+          nextTick: function (fn) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            queueMicrotask(function () {
+              fn.apply(null, args);
+            });
+          },
+        };
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

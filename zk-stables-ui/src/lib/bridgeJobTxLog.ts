@@ -15,6 +15,17 @@ function push(out: TxLogEntry[], e: TxLogEntry) {
   out.push(e);
 }
 
+function asNonEmptyString(v: unknown): string | null {
+  if (v == null) return null;
+  const s = typeof v === 'string' ? v : String(v);
+  return s.length > 0 ? s : null;
+}
+
+function shortenMiddle(s: string, head: number, tail: number): string {
+  if (s.length <= head + tail + 1) return s;
+  return `${s.slice(0, head)}…${s.slice(-tail)}`;
+}
+
 export function buildTxLogEntries(job: RelayerJobApi): TxLogEntry[] {
   const out: TxLogEntry[] = [];
   const intent = job.intent as {
@@ -74,9 +85,9 @@ export function buildTxLogEntries(job: RelayerJobApi): TxLogEntry[] {
 
   if (job.proofBundle) {
     const pb = job.proofBundle as {
-      algorithm: string;
-      digest: string;
-      publicInputsHex?: string;
+      algorithm?: unknown;
+      digest?: unknown;
+      publicInputsHex?: unknown;
       inclusion?: {
         txHash?: string;
         blockNumber?: string | number;
@@ -84,27 +95,32 @@ export function buildTxLogEntries(job: RelayerJobApi): TxLogEntry[] {
         merkleRoot?: string;
       };
     };
+    const algorithm = asNonEmptyString(pb.algorithm) ?? '—';
     push(out, {
       id: 'proof-alg',
       chain: 'proof',
       label: 'Proof algorithm',
-      display: pb.algorithm,
-      full: pb.algorithm,
+      display: algorithm,
+      full: algorithm,
     });
-    push(out, {
-      id: 'proof-digest',
-      chain: 'proof',
-      label: 'Proof digest',
-      display: pb.digest.length > 48 ? `${pb.digest.slice(0, 24)}…${pb.digest.slice(-12)}` : pb.digest,
-      full: pb.digest,
-    });
-    if (pb.publicInputsHex) {
+    const digest = asNonEmptyString(pb.digest);
+    if (digest) {
+      push(out, {
+        id: 'proof-digest',
+        chain: 'proof',
+        label: 'Proof digest',
+        display: digest.length > 48 ? shortenMiddle(digest, 24, 12) : digest,
+        full: digest,
+      });
+    }
+    const pubHex = asNonEmptyString(pb.publicInputsHex);
+    if (pubHex) {
       push(out, {
         id: 'proof-pub',
         chain: 'proof',
         label: 'Public inputs (hex)',
-        display: pb.publicInputsHex.length > 48 ? `${pb.publicInputsHex.slice(0, 20)}…` : pb.publicInputsHex,
-        full: pb.publicInputsHex,
+        display: pubHex.length > 48 ? `${pubHex.slice(0, 20)}…` : pubHex,
+        full: pubHex,
       });
     }
     const inc = pb.inclusion;
@@ -152,16 +168,14 @@ export function buildTxLogEntries(job: RelayerJobApi): TxLogEntry[] {
     }
   }
 
-  if (job.depositCommitmentHex) {
+  const depHex = asNonEmptyString(job.depositCommitmentHex);
+  if (depHex) {
     push(out, {
       id: 'deposit-commit',
       chain: 'proof',
       label: 'Deposit commitment',
-      display:
-        job.depositCommitmentHex.length > 48
-          ? `${job.depositCommitmentHex.slice(0, 20)}…${job.depositCommitmentHex.slice(-12)}`
-          : job.depositCommitmentHex,
-      full: job.depositCommitmentHex,
+      display: depHex.length > 48 ? shortenMiddle(depHex, 20, 12) : depHex,
+      full: depHex,
     });
   }
 
@@ -202,27 +216,25 @@ export function buildTxLogEntries(job: RelayerJobApi): TxLogEntry[] {
       full: parsed.cardano.unlockTx,
     });
   }
-  if (parsed.midnight?.contract) {
+  const mnContract = parsed.midnight?.contract != null ? asNonEmptyString(parsed.midnight.contract) : null;
+  if (mnContract) {
     push(out, {
       id: 'dst-mn-contract',
       chain: 'midnight',
       label: 'Midnight · Contract',
-      display:
-        parsed.midnight.contract.length > 48
-          ? `${parsed.midnight.contract.slice(0, 16)}…${parsed.midnight.contract.slice(-12)}`
-          : parsed.midnight.contract,
-      full: parsed.midnight.contract,
+      display: mnContract.length > 48 ? shortenMiddle(mnContract, 16, 12) : mnContract,
+      full: mnContract,
     });
   }
   if (parsed.midnight?.proveHolder?.txId || parsed.midnight?.proveHolder?.txHash) {
-    const txId = parsed.midnight.proveHolder.txId;
-    const txHash = parsed.midnight.proveHolder.txHash;
+    const txId = asNonEmptyString(parsed.midnight.proveHolder.txId);
+    const txHash = asNonEmptyString(parsed.midnight.proveHolder.txHash);
     if (txId) {
       push(out, {
         id: 'dst-mn-prove-id',
         chain: 'midnight',
         label: 'Midnight · proveHolder txId',
-        display: txId.length > 52 ? `${txId.slice(0, 24)}…${txId.slice(-16)}` : txId,
+        display: txId.length > 52 ? shortenMiddle(txId, 24, 16) : txId,
         full: txId,
       });
     }
@@ -231,20 +243,20 @@ export function buildTxLogEntries(job: RelayerJobApi): TxLogEntry[] {
         id: 'dst-mn-prove-hash',
         chain: 'midnight',
         label: 'Midnight · proveHolder txHash',
-        display: txHash.length > 48 ? `${txHash.slice(0, 16)}…${txHash.slice(-12)}` : txHash,
+        display: txHash.length > 48 ? shortenMiddle(txHash, 16, 12) : txHash,
         full: txHash,
       });
     }
   }
   if (parsed.midnight?.mintWrappedUnshielded?.txId || parsed.midnight?.mintWrappedUnshielded?.txHash) {
-    const txId = parsed.midnight.mintWrappedUnshielded.txId;
-    const txHash = parsed.midnight.mintWrappedUnshielded.txHash;
+    const txId = asNonEmptyString(parsed.midnight.mintWrappedUnshielded.txId);
+    const txHash = asNonEmptyString(parsed.midnight.mintWrappedUnshielded.txHash);
     if (txId) {
       push(out, {
         id: 'dst-mn-mint-id',
         chain: 'midnight',
         label: 'Midnight · mintWrappedUnshielded txId',
-        display: txId.length > 52 ? `${txId.slice(0, 24)}…${txId.slice(-16)}` : txId,
+        display: txId.length > 52 ? shortenMiddle(txId, 24, 16) : txId,
         full: txId,
       });
     }
@@ -253,7 +265,7 @@ export function buildTxLogEntries(job: RelayerJobApi): TxLogEntry[] {
         id: 'dst-mn-mint-hash',
         chain: 'midnight',
         label: 'Midnight · mintWrappedUnshielded txHash',
-        display: txHash.length > 48 ? `${txHash.slice(0, 16)}…${txHash.slice(-12)}` : txHash,
+        display: txHash.length > 48 ? shortenMiddle(txHash, 16, 12) : txHash,
         full: txHash,
       });
     }

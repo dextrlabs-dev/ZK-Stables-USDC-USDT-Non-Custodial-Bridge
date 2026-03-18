@@ -1,0 +1,39 @@
+diff --git a/node_modules/@wagmi/core/dist/esm/connectors/injected.js b/node_modules/@wagmi/core/dist/esm/connectors/injected.js
+index 9501be1..54d9d68 100644
+--- a/node_modules/@wagmi/core/dist/esm/connectors/injected.js
++++ b/node_modules/@wagmi/core/dist/esm/connectors/injected.js
+@@ -2,7 +2,6 @@ import { getAddress, numberToHex, ResourceUnavailableRpcError, SwitchChainError,
+ import { ChainNotConfiguredError } from '../errors/config.js';
+ import { ProviderNotFoundError } from '../errors/connector.js';
+ import { createConnector } from './createConnector.js';
+-injected.type = 'injected';
+ export function injected(parameters = {}) {
+     const { shimDisconnect = true, unstable_shimAsyncInject } = parameters;
+     function getTarget() {
+@@ -454,6 +453,7 @@ export function injected(parameters = {}) {
+         },
+     }));
+ }
++injected.type = 'injected';
+ const targetMap = {
+     coinbaseWallet: {
+         id: 'coinbaseWallet',
+diff --git a/node_modules/@wagmi/core/dist/esm/connectors/mock.js b/node_modules/@wagmi/core/dist/esm/connectors/mock.js
+index 0feae49..3f6581c 100644
+--- a/node_modules/@wagmi/core/dist/esm/connectors/mock.js
++++ b/node_modules/@wagmi/core/dist/esm/connectors/mock.js
+@@ -2,7 +2,6 @@ import { custom, fromHex, getAddress, keccak256, numberToHex, RpcRequestError, S
+ import { rpc } from 'viem/utils';
+ import { ChainNotConfiguredError, ConnectorNotConnectedError, } from '../errors/config.js';
+ import { createConnector } from './createConnector.js';
+-mock.type = 'mock';
+ export function mock(parameters) {
+     const transactionCache = new Map();
+     const features = parameters.features ??
+@@ -252,4 +251,5 @@ export function mock(parameters) {
+         },
+     }));
+ }
++mock.type = 'mock';
+ //# sourceMappingURL=mock.js.map
+\ No newline at end of file

@@ -15,10 +15,18 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { useConnection } from 'wagmi';
+import { useConnection, usePublicClient, useWriteContract } from 'wagmi';
+import { formatUnits, isAddress, parseUnits, type Address, type Hex } from 'viem';
+import { parseEnvEthereumAddress } from '../utils/envAddress.js';
 import { useZkStables } from '../hooks/useZkStables.js';
 import { useCrossChainWallets, type SourceChainKind } from '../contexts/CrossChainWalletContext.js';
 import { AssetKind } from '../constants/zk-stables.js';
+import {
+  formatZkBurnWalletError,
+  parseBurnedFromReceipt,
+  randomBytes32Hex,
+  zkStableBurnAbi,
+} from '../lib/evmZkStableBurn.js';
 
 const defaultRelayerUrl = () =>
   (import.meta.env.VITE_RELAYER_URL && String(import.meta.env.VITE_RELAYER_URL).trim()) || 'http://127.0.0.1:8787';
@@ -47,19 +55,20 @@ type RelayerJob = {
 
 const RELAYER_STUB_WARN_DISMISS_KEY = 'zk-stables-ui-dismiss-relayer-stub-warn';
 
-function randomBytes32Hex(): string {
-  const b = new Uint8Array(32);
-  crypto.getRandomValues(b);
-  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+function isEvmRecipientAddress(addr: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/u.test(addr.trim());
 }
 
 /** SRS §3.1 lock intent + POST to zk-stables-relayer (`/v1/intents/lock`). */
 export const CrossChainIntentPanel: React.FC = () => {
-  const { address: evmAddress, isConnected: evmConnected } = useConnection();
+  const publicClient = usePublicClient();
+  const { writeContractAsync, isPending: evmBurnWalletPending } = useWriteContract();
+  const { address: evmAddress, isConnected: evmConnected, status: evmStatus } = useConnection();
   const {
     walletAddress: midnightShieldedAddress,
     unshieldedAddress: midnightUnshieldedAddress,
     isConnected: midnightConnected,
+    lastMidnightBurnAnchor,
   } = useZkStables();
   const { cardanoUsedAddressesHex, cardanoWalletKey } = useCrossChainWallets();
 
@@ -69,11 +78,15 @@ export const CrossChainIntentPanel: React.FC = () => {
   const [asset, setAsset] = useState<'USDC' | 'USDT'>('USDC');
   const [amount, setAmount] = useState('100');
   const [recipient, setRecipient] = useState('');
-  /** BURN-only: 32-byte binding for Midnight `depositCommitment` preimage (relayer validates 64 hex chars). */
-  const [burnCommitmentHex, setBurnCommitmentHex] = useState(randomBytes32Hex);
+  /** BURN-only: must match on-chain `burn(..., burnCommitment)` on zkUSDC/zkUSDT (see `Burned` event). */
+  const [burnCommitmentHex, setBurnCommitmentHex] = useState('');
+  const [evmBurnWalletMsg, setEvmBurnWalletMsg] = useState<string | null>(null);
   /** Optional Cardano burn test anchor (stub `depositCommitment` when both are valid 32-byte tx id). */
   const [cardanoBurnTxHex, setCardanoBurnTxHex] = useState('00'.repeat(32));
   const [cardanoBurnOutputIndex, setCardanoBurnOutputIndex] = useState('0');
+  const [cardanoBurnSpendTxHex, setCardanoBurnSpendTxHex] = useState('');
+  const [midnightBurnTxId, setMidnightBurnTxId] = useState('');
+  const [midnightBurnDestChain, setMidnightBurnDestChain] = useState('');
   const [lastIntent, setLastIntent] = useState<string | null>(null);
   const [relayerUrl] = useState(defaultRelayerUrl);
   const [relayerJob, setRelayerJob] = useState<RelayerJob | null>(null);
@@ -89,6 +102,99 @@ export const CrossChainIntentPanel: React.FC = () => {
   const relayerPhaseRef = useRef<string | null>(null);
   const relayerJobIdRef = useRef<string | null>(null);
 
+  useEffect(() => {
+    setBurnCommitmentHex('');
+    setEvmBurnWalletMsg(null);
+    setMidnightBurnTxId('');
+    setMidnightBurnDestChain('');
+  }, [operation, asset, sourceChain]);
+
+  useEffect(() => {
+    if (operation === 'LOCK') setSourceChain('evm');
+  }, [operation]);
+
+  useEffect(() => {
+    if (operation !== 'BURN' || sourceChain !== 'midnight') return;
+    if (!lastMidnightBurnAnchor) {
+      setBurnCommitmentHex('');
+      setMidnightBurnTxId('');
+      setMidnightBurnDestChain('');
+      return;
+    }
+    setBurnCommitmentHex(lastMidnightBurnAnchor.recipientCommHex64);
+    setMidnightBurnTxId(lastMidnightBurnAnchor.txId);
+    setMidnightBurnDestChain(lastMidnightBurnAnchor.destChain);
+  }, [operation, sourceChain, lastMidnightBurnAnchor]);
+
+  const wrappedTokenAddress = useMemo((): Address | undefined => {
+    const raw =
+      asset === 'USDT'
+        ? import.meta.env.VITE_DEMO_WUSDT_ADDRESS
+        : import.meta.env.VITE_DEMO_WUSDC_ADDRESS;
+    return parseEnvEthereumAddress(raw);
+  }, [asset]);
+
+  const evmCanBurnZk = Boolean(evmAddress) && (evmConnected || evmStatus === 'connecting' || evmStatus === 'reconnecting');
+
+  const zkSymbol = asset === 'USDC' ? 'zkUSDC' : 'zkUSDT';
+
+  const burnZkFromWallet = useCallback(async () => {
+    setEvmBurnWalletMsg(null);
+    if (!wrappedTokenAddress) {
+      setEvmBurnWalletMsg('Set VITE_DEMO_WUSDC_ADDRESS / VITE_DEMO_WUSDT_ADDRESS for the selected asset.');
+      return;
+    }
+    if (!evmAddress) {
+      setEvmBurnWalletMsg('Connect an EVM wallet (same network as the demo tokens).');
+      return;
+    }
+    if (!publicClient) {
+      setEvmBurnWalletMsg('RPC client not ready.');
+      return;
+    }
+    const r = recipient.trim();
+    if (!isAddress(r)) {
+      setEvmBurnWalletMsg('Set a valid 0x recipient for underlying USDC/USDT unlock.');
+      return;
+    }
+    let raw: bigint;
+    try {
+      raw = parseUnits(amount.trim() || '0', 6);
+    } catch {
+      setEvmBurnWalletMsg('Amount must be a decimal number (6 decimals).');
+      return;
+    }
+    if (raw <= 0n) {
+      setEvmBurnWalletMsg('Amount must be greater than zero.');
+      return;
+    }
+    const commitmentBare = randomBytes32Hex();
+    const burnCommitment = `0x${commitmentBare}` as Hex;
+    const nonce = `0x${randomBytes32Hex()}` as Hex;
+    try {
+      const hash = await writeContractAsync({
+        address: wrappedTokenAddress,
+        abi: zkStableBurnAbi,
+        functionName: 'burn',
+        args: [raw, r as Address, nonce, burnCommitment],
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const parsed = parseBurnedFromReceipt(receipt, wrappedTokenAddress);
+      if (parsed) {
+        setBurnCommitmentHex(parsed.burnCommitmentHex);
+        setRecipient(parsed.recipientOnSource);
+        setAmount(formatUnits(BigInt(parsed.amount), 6));
+        setEvmBurnWalletMsg(
+          `${zkSymbol} burned on-chain; redeem commitment stored for the relayer. Use Send to relayer when ready.`,
+        );
+      } else {
+        setEvmBurnWalletMsg('Tx mined but no Burned log for this token (wrong network or contract?).');
+      }
+    } catch (e) {
+      setEvmBurnWalletMsg(formatZkBurnWalletError(e));
+    }
+  }, [amount, evmAddress, publicClient, recipient, wrappedTokenAddress, writeContractAsync, zkSymbol]);
+
   const dismissRelayerStubWarn = useCallback(() => {
     try {
       window.localStorage.setItem(RELAYER_STUB_WARN_DISMISS_KEY, '1');
@@ -98,10 +204,12 @@ export const CrossChainIntentPanel: React.FC = () => {
     setHideRelayerStubWarn(true);
   }, []);
 
-  /** LOCK from EVM/Cardano → funds route to Midnight; recipient must be a Midnight address (never 0x / Cardano hex). */
-  const lockNeedsMidnightRecipient = operation === 'LOCK' && (sourceChain === 'evm' || sourceChain === 'cardano');
+  /** LOCK from EVM → funds route to Midnight; recipient must be a Midnight address. */
+  const lockNeedsMidnightRecipient = operation === 'LOCK' && sourceChain === 'evm';
   /** LOCK from Midnight → recipient is on the *destination* chain (EVM or Cardano), not Midnight. */
   const lockNeedsNonMidnightRecipient = operation === 'LOCK' && sourceChain === 'midnight';
+  /** BURN → unlocked underlying on EVM only for Cardano/Midnight source. */
+  const burnNeedsEvmRecipientOnly = operation === 'BURN' && (sourceChain === 'cardano' || sourceChain === 'midnight');
   /** BURN → unlocked assets go to an address on the *source* chain (EVM or Cardano), not Midnight. */
   const burnNeedsSourceRecipient = operation === 'BURN';
 
@@ -109,7 +217,7 @@ export const CrossChainIntentPanel: React.FC = () => {
 
   const hintRecipient = useCallback(() => {
     if (operation === 'LOCK') {
-      if (sourceChain === 'evm' || sourceChain === 'cardano') {
+      if (sourceChain === 'evm') {
         if (midnightShieldedAddress) setRecipient(midnightShieldedAddress);
         else if (midnightUnshieldedAddress) setRecipient(midnightUnshieldedAddress);
         return;
@@ -123,11 +231,8 @@ export const CrossChainIntentPanel: React.FC = () => {
     }
     if (operation === 'BURN') {
       if (sourceChain === 'evm' && evmConnected && evmAddress) setRecipient(evmAddress);
-      else if (sourceChain === 'cardano' && cardanoWalletKey && cardanoUsedAddressesHex[0]) {
-        setRecipient(cardanoUsedAddressesHex[0]);
-      } else if (sourceChain === 'midnight') {
+      else if (sourceChain === 'cardano' || sourceChain === 'midnight') {
         if (evmConnected && evmAddress) setRecipient(evmAddress);
-        else if (cardanoWalletKey && cardanoUsedAddressesHex[0]) setRecipient(cardanoUsedAddressesHex[0]);
       }
     }
   }, [
@@ -142,14 +247,13 @@ export const CrossChainIntentPanel: React.FC = () => {
   ]);
 
   const canPrefill = useMemo(() => {
-    if (operation === 'LOCK' && (sourceChain === 'evm' || sourceChain === 'cardano')) return hasMidnightRecipientOption;
+    if (operation === 'LOCK' && sourceChain === 'evm') return hasMidnightRecipientOption;
     if (operation === 'LOCK' && sourceChain === 'midnight') {
       return (evmConnected && !!evmAddress) || (!!cardanoWalletKey && cardanoUsedAddressesHex.length > 0);
     }
     if (operation === 'BURN' && sourceChain === 'evm') return evmConnected && !!evmAddress;
-    if (operation === 'BURN' && sourceChain === 'cardano') return !!cardanoWalletKey && cardanoUsedAddressesHex.length > 0;
-    if (operation === 'BURN' && sourceChain === 'midnight') {
-      return (evmConnected && !!evmAddress) || (!!cardanoWalletKey && cardanoUsedAddressesHex.length > 0);
+    if (operation === 'BURN' && (sourceChain === 'cardano' || sourceChain === 'midnight')) {
+      return evmConnected && !!evmAddress;
     }
     return false;
   }, [
@@ -165,14 +269,19 @@ export const CrossChainIntentPanel: React.FC = () => {
   const buildPayload = useCallback(() => {
     const r = recipient.trim();
     if (!r) return null;
-    const bc = burnCommitmentHex.replace(/^0x/i, '').trim();
+    if (burnNeedsEvmRecipientOnly && !isEvmRecipientAddress(r)) return null;
+    const bcRaw = burnCommitmentHex.replace(/^0x/i, '').trim();
     if (operation === 'BURN') {
-      if (bc.length !== 64 || !/^[0-9a-fA-F]+$/.test(bc)) return null;
+      if (bcRaw.length !== 64 || !/^[0-9a-fA-F]+$/.test(bcRaw)) {
+        return null;
+      }
     }
+    const bc = bcRaw.toLowerCase();
+    const destChainResolved = destChainLabel.trim() || undefined;
     const base: Record<string, unknown> = {
       operation,
       sourceChain,
-      destinationChain: destChainLabel.trim() || undefined,
+      destinationChain: destChainResolved,
       asset,
       assetKind: asset === 'USDC' ? AssetKind.USDC : AssetKind.USDT,
       amount,
@@ -185,16 +294,36 @@ export const CrossChainIntentPanel: React.FC = () => {
       },
       note:
         operation === 'LOCK'
-          ? 'LOCK intent: relayer can pick up on-chain Locked events and build merkle-inclusion proofs when a tx anchor is present.'
-          : 'BURN intent: EVM/Cardano burn tests use wrapped-token flow; burnCommitment ties the burn to Midnight depositCommitment.',
+          ? 'LOCK intent: EVM lock of USDC/USDT toward zk mint on destination (HTTP API requires sourceChain evm).'
+          : `Redeem intent: burn ${zkSymbol} on source chain; burnCommitment must match; underlying ${asset} pays out on EVM for Cardano/Midnight source.`,
     };
     if (operation === 'BURN') {
       base.burnCommitmentHex = bc;
       if (sourceChain === 'cardano') {
-        const txH = cardanoBurnTxHex.replace(/^0x/i, '').trim();
+        const txH = cardanoBurnTxHex.replace(/^0x/i, '').trim().toLowerCase();
         const oi = Math.max(0, Number.parseInt(cardanoBurnOutputIndex, 10) || 0);
-        if (txH.length === 64 && /^[0-9a-fA-F]+$/.test(txH)) {
-          base.source = { cardano: { txHash: txH, outputIndex: oi } };
+        const spend = cardanoBurnSpendTxHex.replace(/^0x/i, '').trim().toLowerCase();
+        if (txH.length === 64 && /^[0-9a-f]+$/.test(txH)) {
+          const cardanoSrc: Record<string, unknown> = { txHash: txH, outputIndex: oi };
+          if (spend.length === 64 && /^[0-9a-f]+$/.test(spend)) cardanoSrc.spendTxHash = spend;
+          base.source = { cardano: cardanoSrc };
+        }
+      }
+      if (sourceChain === 'midnight') {
+        const txId = midnightBurnTxId.trim() || lastMidnightBurnAnchor?.txId;
+        if (txId) {
+          const dc = Number.parseInt(
+            (midnightBurnDestChain.trim() || lastMidnightBurnAnchor?.destChain || '0').trim(),
+            10,
+          );
+          base.source = {
+            midnight: {
+              txId,
+              txHash: lastMidnightBurnAnchor?.txHash,
+              contractAddress: lastMidnightBurnAnchor?.contractAddress ?? undefined,
+              destChainId: Number.isFinite(dc) ? dc : undefined,
+            },
+          };
         }
       }
     }
@@ -209,6 +338,10 @@ export const CrossChainIntentPanel: React.FC = () => {
     burnCommitmentHex,
     cardanoBurnTxHex,
     cardanoBurnOutputIndex,
+    cardanoBurnSpendTxHex,
+    midnightBurnTxId,
+    midnightBurnDestChain,
+    lastMidnightBurnAnchor,
     evmConnected,
     evmAddress,
     cardanoWalletKey,
@@ -216,6 +349,7 @@ export const CrossChainIntentPanel: React.FC = () => {
     midnightConnected,
     midnightShieldedAddress,
     midnightUnshieldedAddress,
+    zkSymbol,
   ]);
 
   const recordLockIntent = useCallback(() => {
@@ -281,7 +415,11 @@ export const CrossChainIntentPanel: React.FC = () => {
     if (!payload) {
       setRelayerError(
         operation === 'BURN'
-          ? 'Add a recipient address, and enter the burn commitment as exactly 64 hexadecimal characters (32 bytes).'
+          ? sourceChain === 'evm'
+            ? `Burn ${zkSymbol} from your wallet first, then send the redeem intent.`
+            : sourceChain === 'cardano' || sourceChain === 'midnight'
+              ? 'Redeem from Cardano/Midnight requires an EVM 0x… recipient (40 hex chars) and valid burn fields.'
+              : 'Add a recipient before submitting.'
           : 'Add a recipient address before submitting.',
       );
       return;
@@ -323,7 +461,7 @@ export const CrossChainIntentPanel: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [buildPayload, relayerUrl, stopPoll, operation]);
+  }, [buildPayload, relayerUrl, stopPoll, operation, zkSymbol, sourceChain]);
 
   const cardanoStatusTooltip =
     relayerChainsCardano &&
@@ -354,9 +492,9 @@ export const CrossChainIntentPanel: React.FC = () => {
           Cross-chain intents
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Send a <strong>lock</strong> or <strong>burn</strong> request to the <strong>zk-stables-relayer</strong>. The relayer
-          waits for (simulated or real) finality, runs a stub proof step, then returns status and hints. You still deploy pool
-          contracts on EVM/Cardano separately; this form only talks to the relayer HTTP API.
+          Send a <strong>lock</strong> (mint path: lock <strong>USDC/USDT on EVM</strong> → zk on Cardano/Midnight) or <strong>redeem</strong> (burn zk on source
+          chain; <strong>underlying pays on EVM</strong> for Cardano/Midnight burns) to the <strong>zk-stables-relayer</strong>. HTTP LOCK requires{' '}
+          <code>sourceChain: evm</code>. The relayer waits for finality, runs proof/stub steps, then returns status and hints.
         </Typography>
         <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1} sx={{ mb: 1 }}>
           <Typography variant="caption" color="text.secondary">
@@ -403,12 +541,12 @@ export const CrossChainIntentPanel: React.FC = () => {
             onChange={(e) => setOperation(e.target.value as 'LOCK' | 'BURN')}
             helperText={
               operation === 'LOCK'
-                ? 'Lock funds on the source chain toward a mint or credit on the destination.'
-                : 'Burn on the source chain so funds can be released back on that chain after proof.'
+                ? 'Lock USDC/USDT on EVM toward zkUSDC/zkUSDT on the destination (Cardano/Midnight).'
+                : `Redeem: burn ${zkSymbol} on the source chain; underlying ${asset} is paid on EVM after proof (Cardano/Midnight source).`
             }
           >
             <MenuItem value="LOCK">LOCK</MenuItem>
-            <MenuItem value="BURN">BURN</MenuItem>
+            <MenuItem value="BURN">REDEEM (burn zk → USDC/USDT)</MenuItem>
           </TextField>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <TextField
@@ -420,16 +558,20 @@ export const CrossChainIntentPanel: React.FC = () => {
               onChange={(e) => setSourceChain(e.target.value as SourceChainKind)}
             >
               <MenuItem value="evm">EVM (Ethereum L1 / L2)</MenuItem>
-              <MenuItem value="cardano">Cardano</MenuItem>
-              <MenuItem value="midnight">Midnight</MenuItem>
+              <MenuItem value="cardano" disabled={operation === 'LOCK'}>
+                Cardano {operation === 'LOCK' ? '(LOCK via HTTP is EVM-only)' : ''}
+              </MenuItem>
+              <MenuItem value="midnight" disabled={operation === 'LOCK'}>
+                Midnight {operation === 'LOCK' ? '(LOCK via HTTP is EVM-only)' : ''}
+              </MenuItem>
             </TextField>
             <TextField
-            label="Destination chain label"
-            size="small"
-            fullWidth
-            value={destChainLabel}
-            onChange={(e) => setDestChainLabel(e.target.value)}
-            helperText="Name or id the relayer uses for routing (e.g. midnight). Must match how the relayer is configured."
+              label="Destination chain label"
+              size="small"
+              fullWidth
+              value={destChainLabel}
+              onChange={(e) => setDestChainLabel(e.target.value)}
+              helperText="Name or id the relayer uses for routing (e.g. midnight). Must match how the relayer is configured."
             />
           </Stack>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
@@ -443,48 +585,146 @@ export const CrossChainIntentPanel: React.FC = () => {
               fullWidth
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              helperText="Decimal string as your integration expects (demo default is a plain number)."
+              helperText={
+                operation === 'BURN'
+                  ? `Face value: you burn ${zkSymbol} and unlock the same amount in ${asset}.`
+                  : 'Decimal string as your integration expects (demo default is a plain number).'
+              }
             />
           </Stack>
           {operation === 'BURN' && (
             <>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'flex-start' }}>
-                <TextField
-                  label="Burn commitment"
-                  size="small"
-                  fullWidth
-                  value={burnCommitmentHex}
-                  onChange={(e) => setBurnCommitmentHex(e.target.value.replace(/\s/g, ''))}
-                  helperText="Exactly 64 hex characters (32 bytes). Must match the commitment emitted when you burn on-chain."
-                />
-                <Button sx={{ mt: { xs: 0, sm: 0.5 } }} size="small" variant="outlined" onClick={() => setBurnCommitmentHex(randomBytes32Hex())}>
-                  Generate random
-                </Button>
-              </Stack>
+              {sourceChain === 'evm' && (
+                <Stack spacing={1.5}>
+                  <Box
+                    component="details"
+                    sx={{
+                      borderRadius: 2,
+                      border: '1px solid',
+                      borderColor: 'warning.light',
+                      bgcolor: 'warning.50',
+                      px: 2,
+                      py: 1.25,
+                    }}
+                  >
+                    <Box
+                      component="summary"
+                      sx={{
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        fontSize: 13,
+                        color: 'warning.dark',
+                        listStylePosition: 'outside',
+                      }}
+                    >
+                      How EVM redeem works
+                    </Box>
+                    <Typography variant="caption" component="div" color="text.secondary" sx={{ mt: 1.5, display: 'block', lineHeight: 1.55 }}>
+                      On EVM, redeem = call <code>burn</code> on {zkSymbol}. That destroys your zk balance and emits <strong>Burned</strong>. The relayer
+                      matches your intent to that event, then releases {asset} (underlying) to your recipient. The redeem intent includes the same 32-byte{' '}
+                      <code>burnCommitment</code> as the contract — it is created when you use the wallet burn button and read back from the receipt (nothing
+                      to paste).
+                    </Typography>
+                    <Typography variant="caption" component="div" color="text.secondary" sx={{ mt: 1.25, display: 'block', lineHeight: 1.5 }}>
+                      <strong>Midnight note:</strong> Relayer messages like <code>proveHolder</code> or insufficient dust refer to the relayer&apos;s Midnight
+                      wallet on LOCK → Midnight, not this flow. Use <code>local-cli fund-and-register-dust</code> for that wallet if needed.
+                    </Typography>
+                  </Box>
+                  <Button
+                    variant="contained"
+                    color="secondary"
+                    size="medium"
+                    disabled={evmBurnWalletPending || !wrappedTokenAddress || !evmCanBurnZk}
+                    onClick={() => void burnZkFromWallet()}
+                    sx={{ alignSelf: 'flex-start' }}
+                  >
+                    {evmBurnWalletPending ? 'Confirm in wallet…' : `Burn ${zkSymbol} from wallet`}
+                  </Button>
+                  {!evmBurnWalletPending && (!wrappedTokenAddress || !evmCanBurnZk) ? (
+                    <Typography variant="caption" color="warning.dark" sx={{ display: 'block', maxWidth: 420 }}>
+                      {!wrappedTokenAddress
+                        ? 'Set VITE_DEMO_WUSDC_ADDRESS / VITE_DEMO_WUSDT_ADDRESS in .env and restart Vite.'
+                        : 'Connect an EVM wallet (or Anvil demo) on Hardhat (31337) for local zk tokens.'}
+                    </Typography>
+                  ) : null}
+                  {evmBurnWalletMsg ? (
+                    <Typography variant="caption" color={/burned on-chain/i.test(evmBurnWalletMsg) ? 'success' : 'error'}>
+                      {evmBurnWalletMsg}
+                    </Typography>
+                  ) : null}
+                </Stack>
+              )}
               {sourceChain === 'cardano' && (
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <Alert severity="info" variant="outlined" sx={{ py: 0.75 }}>
+                  <Typography variant="caption">
+                    Cardano redeem: use the main bridge card for user <strong>BridgeRelease</strong>, or paste lock ref + <strong>spend tx</strong> (64 hex
+                    each) after you spend the lock UTxO. Relayer matches <code>burnCommitmentHex</code> to lock datum <code>recipient_commitment</code> (see{' '}
+                    <code>docs/BURN_ANCHOR_SPEC.md</code>). Underlying <strong>{asset}</strong> is sent to your <strong>EVM 0x…</strong> recipient after the relayer
+                    runs.
+                  </Typography>
+                </Alert>
+              )}
+              {sourceChain === 'midnight' && (
+                <Alert severity="info" variant="outlined" sx={{ py: 0.75 }}>
+                  <Typography variant="caption" component="div">
+                    Midnight redeem: run <strong>initiateBurn</strong> in Developer tools. <code>txId</code>, dest chain, and <code>burnCommitmentHex</code> sync from
+                    the last successful call in this session — no manual entry. Underlying <strong>{asset}</strong> pays out on <strong>EVM</strong> to your 0x…
+                    recipient.
+                  </Typography>
+                  {lastMidnightBurnAnchor ? (
+                    <Typography variant="caption" component="div" sx={{ mt: 1, fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all' }}>
+                      <strong>Tx id:</strong> {lastMidnightBurnAnchor.txId}
+                      <br />
+                      <strong>Dest chain:</strong> {lastMidnightBurnAnchor.destChain}
+                      <br />
+                      <strong>Commitment:</strong> {lastMidnightBurnAnchor.recipientCommHex64}
+                    </Typography>
+                  ) : (
+                    <Typography variant="caption" color="warning.main" sx={{ mt: 1, display: 'block' }}>
+                      No anchor yet — run initiateBurn first, then build/send the intent.
+                    </Typography>
+                  )}
+                </Alert>
+              )}
+              {sourceChain === 'cardano' && (
+                <Stack spacing={2}>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                    <TextField
+                      label="Lock UTxO transaction id (64 hex)"
+                      size="small"
+                      fullWidth
+                      value={cardanoBurnTxHex}
+                      onChange={(e) => setCardanoBurnTxHex(e.target.value.replace(/\s/g, ''))}
+                    />
+                    <TextField
+                      label="Output index"
+                      size="small"
+                      type="number"
+                      sx={{ minWidth: 120 }}
+                      value={cardanoBurnOutputIndex}
+                      onChange={(e) => setCardanoBurnOutputIndex(e.target.value)}
+                    />
+                  </Stack>
                   <TextField
-                    label="Cardano burn transaction id"
+                    label="BridgeRelease spend transaction id (64 hex)"
                     size="small"
                     fullWidth
-                    value={cardanoBurnTxHex}
-                    onChange={(e) => setCardanoBurnTxHex(e.target.value.replace(/\s/g, ''))}
-                    helperText="Optional. 64-character hex transaction id for Cardano-sourced burn tests (stub anchor)."
-                  />
-                  <TextField
-                    label="UTxO output index"
-                    size="small"
-                    type="number"
-                    sx={{ minWidth: 120 }}
-                    value={cardanoBurnOutputIndex}
-                    onChange={(e) => setCardanoBurnOutputIndex(e.target.value)}
+                    value={cardanoBurnSpendTxHex}
+                    onChange={(e) => setCardanoBurnSpendTxHex(e.target.value.replace(/\s/g, ''))}
+                    helperText="Required for POST /v1/intents/burn from this panel (proves the lock was consumed)."
                   />
                 </Stack>
               )}
             </>
           )}
           <TextField
-            label={operation === 'LOCK' ? 'Recipient on destination chain' : 'Recipient on source chain (funds return here)'}
+            label={
+              operation === 'LOCK'
+                ? 'Recipient on destination chain'
+                : burnNeedsEvmRecipientOnly
+                  ? `Recipient on EVM (${asset} payout)`
+                  : 'Recipient on source chain (funds return here)'
+            }
             size="small"
             fullWidth
             value={recipient}
@@ -492,11 +732,13 @@ export const CrossChainIntentPanel: React.FC = () => {
             helperText={
               lockNeedsMidnightRecipient
                 ? 'Use a Midnight address only (shielded mn_* or unshielded mn_addr_*). Do not use an EVM 0x or Cardano address here.'
-                : burnNeedsSourceRecipient
-                  ? 'Use an address on the same chain you selected as source — EVM 0x, or Cardano payment credential hex from your wallet. Not a Midnight address.'
-                  : lockNeedsNonMidnightRecipient
-                    ? 'Destination is EVM or Cardano — paste or fill an address for that chain, not Midnight.'
-                    : 'Paste the address format your chosen chain expects.'
+                : burnNeedsEvmRecipientOnly
+                  ? `Redeem pays underlying ${asset} on EVM only. Use a 40-character hex EVM address (0x…).`
+                  : burnNeedsSourceRecipient
+                    ? 'Use an address on the same chain you selected as source — EVM 0x, or Cardano payment credential hex from your wallet. Not a Midnight address.'
+                    : lockNeedsNonMidnightRecipient
+                      ? 'Destination is EVM or Cardano — paste or fill an address for that chain, not Midnight.'
+                      : 'Paste the address format your chosen chain expects.'
             }
           />
           {lockNeedsMidnightRecipient && (
@@ -522,10 +764,10 @@ export const CrossChainIntentPanel: React.FC = () => {
               </Button>
             </Stack>
           )}
-          {(burnNeedsSourceRecipient || lockNeedsNonMidnightRecipient) && (
+          {burnNeedsEvmRecipientOnly && (
             <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center">
               <Typography variant="caption" color="text.secondary">
-                Fill EVM or Cardano address from wallet
+                EVM recipient only
               </Typography>
               <Button
                 size="small"
@@ -535,16 +777,31 @@ export const CrossChainIntentPanel: React.FC = () => {
               >
                 EVM (connected)
               </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                disabled={!cardanoWalletKey || !cardanoUsedAddressesHex[0]}
-                onClick={() => cardanoUsedAddressesHex[0] && setRecipient(cardanoUsedAddressesHex[0])}
-              >
-                Cardano (first used address)
-              </Button>
             </Stack>
           )}
+          {(burnNeedsSourceRecipient || lockNeedsNonMidnightRecipient) && !burnNeedsEvmRecipientOnly && (
+              <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center">
+                <Typography variant="caption" color="text.secondary">
+                  Fill EVM or Cardano address from wallet
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={!evmConnected || !evmAddress}
+                  onClick={() => evmAddress && setRecipient(evmAddress)}
+                >
+                  EVM (connected)
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={!cardanoWalletKey || !cardanoUsedAddressesHex[0]}
+                  onClick={() => cardanoUsedAddressesHex[0] && setRecipient(cardanoUsedAddressesHex[0])}
+                >
+                  Cardano (first used address)
+                </Button>
+              </Stack>
+            )}
           <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center">
             <Button variant="contained" color="primary" disabled={submitting} onClick={() => void submitToRelayer()}>
               {submitting ? 'Sending…' : 'Send to relayer'}

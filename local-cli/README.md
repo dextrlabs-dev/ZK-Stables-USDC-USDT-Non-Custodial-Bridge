@@ -17,6 +17,7 @@ Deploys the `zk-stables` Compact contract to a [Brick Towers local Midnight stac
 | `OPERATOR_SK_HEX` / `HOLDER_SK_HEX` | No | 64 hex chars (32 bytes) each; default `01…` / `02…` in dev. |
 | `DEPOSIT_COMMITMENT_HEX` | No | 64 hex chars; default `00…`. |
 | `INDEXER_PORT` / `NODE_PORT` / `PROOF_SERVER_PORT` | No | Override endpoints in `wallet.ts` (default `8088`, `9944`, `6300`). |
+| `MIDNIGHT_PROOF_SERVER` | No | Full proof-server URL (e.g. `http://127.0.0.1:6301`) if you run a second server; overrides `PROOF_SERVER_PORT`. See [../scripts/start-alt-proof-server.sh](../scripts/start-alt-proof-server.sh). |
 
 ## Flow
 

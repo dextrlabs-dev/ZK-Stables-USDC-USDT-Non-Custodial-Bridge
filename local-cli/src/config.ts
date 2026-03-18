@@ -4,13 +4,21 @@ import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function defaultProofServerUrl(): string {
+  const explicit = process.env.MIDNIGHT_PROOF_SERVER?.replace(/\/$/, '');
+  if (explicit) return explicit;
+  const port = Number.parseInt(process.env.PROOF_SERVER_PORT ?? '6300', 10);
+  return `http://127.0.0.1:${port}`;
+}
+
 /** Brick Towers local network + Midnight undeployed endpoints. */
 export class LocalUndeployedConfig {
   /** Indexer standalone 4.x exposes v3 and v4; align with zk-stables-ui + Midnight local-network defaults. */
   readonly indexer = 'http://127.0.0.1:8088/api/v4/graphql';
   readonly indexerWS = 'ws://127.0.0.1:8088/api/v4/graphql/ws';
   readonly node = 'http://127.0.0.1:9944';
-  readonly proofServer = 'http://127.0.0.1:6300';
+  /** Override with `MIDNIGHT_PROOF_SERVER` (full URL) or `PROOF_SERVER_PORT` (host port, default 6300). */
+  readonly proofServer = defaultProofServerUrl();
 
   /** Managed ZK artifacts (prover/verifier/zkir), same layout as [example-counter `contractConfig.zkConfigPath`](https://github.com/midnightntwrk/example-counter). */
   readonly zkStablesArtifactsDir =

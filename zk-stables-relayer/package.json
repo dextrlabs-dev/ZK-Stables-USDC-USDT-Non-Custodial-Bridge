@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --import tsx src/server.ts",
-    "dev": "node --import tsx --watch src/server.ts",
+    "start": "npx tsx src/server.ts",
+    "dev": "npx tsx watch src/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

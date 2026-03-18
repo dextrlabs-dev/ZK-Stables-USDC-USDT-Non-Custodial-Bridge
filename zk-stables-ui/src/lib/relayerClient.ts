@@ -134,6 +134,23 @@ export type BurnIntentPayload = {
   burnCommitmentHex: string;
   connected?: Record<string, unknown>;
   note?: string;
+  source?: {
+    evm?: Record<string, unknown>;
+    cardano?: {
+      txHash: string;
+      outputIndex: number;
+      blockHeight?: string;
+      lockNonce?: string;
+      spendTxHash?: string;
+    };
+    midnight?: {
+      txId?: string;
+      txHash?: string;
+      contractAddress?: string;
+      destChainId?: number;
+      lockNonce?: string;
+    };
+  };
 };
 
 export async function submitLockIntent(baseUrl: string, body: LockIntentPayload): Promise<{ job: RelayerJobApi; jobId: string }> {

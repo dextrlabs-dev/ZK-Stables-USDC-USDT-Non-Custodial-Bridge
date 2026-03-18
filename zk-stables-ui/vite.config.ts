@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import inject from '@rollup/plugin-inject';
@@ -6,7 +7,6 @@ import react from '@vitejs/plugin-react';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { VitePWA } from 'vite-plugin-pwa';
-import { viteCommonjs } from '@originjs/vite-plugin-commonjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const contractRoot = path.resolve(__dirname, '../contract/dist');
 /** npm workspaces hoist deps to the repo root; `zk-stables-ui/node_modules/@midnight-ntwrk` is often empty. */
@@ -14,6 +14,9 @@ const rootNm = path.resolve(__dirname, '../node_modules');
 const midnight = (pkg: string) => path.join(rootNm, '@midnight-ntwrk', pkg);
 
 export default defineConfig(({ mode }) => ({
+  esbuild: {
+    target: 'es2022',
+  },
   define: {
     'process.env.NODE_ENV': JSON.stringify(mode === 'production' ? 'production' : 'development'),
     global: 'globalThis',
@@ -24,7 +27,6 @@ export default defineConfig(({ mode }) => ({
     }),
     wasm(),
     react(),
-    viteCommonjs(),
     topLevelAwait(),
     // Production: cache hashed JS/CSS/WASM (and public ZK artifacts) locally via Service Worker for fast repeat loads.
     VitePWA({
@@ -69,6 +71,21 @@ export default defineConfig(({ mode }) => ({
       '@midnight-ntwrk/onchain-runtime-v3',
     ],
     alias: {
+      // Mesh → bip39 uses `import { generateMnemonic, mnemonicToEntropy }`; CJS package breaks prod Rollup.
+      bip39: path.join(__dirname, 'src/shims/bip39-esm.ts'),
+      // Mesh default-imports CJS-only base32-encoding.
+      'base32-encoding': path.join(__dirname, 'src/shims/base32-encoding-esm.ts'),
+      'serialize-error': path.join(__dirname, 'src/shims/serialize-error-esm.ts'),
+      // Subsquid hex helpers are CJS; bare `exports` can survive bundling and break preview.
+      '@subsquid/util-internal-hex': path.join(__dirname, 'src/shims/subsquid-util-internal-hex.ts'),
+      // CJS @subsquid/scale-codec leaves bare `exports` in TLA chunks; only Midnight address-format needs it.
+      '@subsquid/scale-codec': path.join(__dirname, 'src/shims/subsquid-scale-codec-esm.ts'),
+      // Other Subsquid CJS still uses `require("assert")`.
+      assert: path.join(__dirname, 'src/shims/node-assert-lite.ts'),
+      // @stricahq/cbors (via @meshsdk/core) extends stream.Transform; Vite externalizes Node "stream" → undefined in browser.
+      stream: path.join(rootNm, 'stream-browserify'),
+      // @meshsdk/provider and readable-stream expect Node's EventEmitter.
+      events: path.join(rootNm, 'events'),
       '@': path.resolve(__dirname, './src'),
       '@midnight-ntwrk/compact-runtime': midnight('compact-runtime'),
       '@midnight-ntwrk/compact-js': midnight('compact-js'),
@@ -98,6 +115,10 @@ export default defineConfig(({ mode }) => ({
     // Pre-bundle the shell so the first dev request is fast.
     include: [
       'buffer',
+      'process',
+      'stream-browserify',
+      'events',
+      '@meshsdk/core',
       'react',
       'react-dom',
       'react/jsx-runtime',
@@ -110,14 +131,17 @@ export default defineConfig(({ mode }) => ({
     ],
   },
   build: {
+    // Default ~ES2020 downlevels public static/instance fields in a way that breaks self-referential
+    // classes (e.g. UnshieldedAddress.[Bech32mSymbol] = UnshieldedAddress.codec → temp is undefined).
+    target: 'es2022',
     commonjsOptions: { transformMixedEsModules: true },
     rollupOptions: {
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
-          if (id.includes('@midnight-ntwrk') || id.includes('ledger-v8')) {
-            return 'midnight';
-          }
+          // Do not split Midnight into its own chunk: it imports Ramda/Effect from `vendor`, while
+          // other `vendor` modules import Midnight — a circular chunk graph leaves live bindings
+          // (e.g. curry) undefined at runtime ("O is not a function" in preview).
           if (id.includes('@mui') || id.includes('@emotion')) {
             return 'mui';
           }
@@ -130,6 +154,8 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
+    // Prevent the browser from reusing a cached index / module graph that references deleted optimizeDeps chunks.
+    headers: { 'Cache-Control': 'no-store' },
     fs: { allow: ['..'] },
     warmup: {
       clientFiles: ['./index.html', './src/main.tsx', './src/globals.ts', './src/bootstrap.tsx', './src/App.tsx'],
@@ -140,6 +166,17 @@ export default defineConfig(({ mode }) => ({
         target: 'http://127.0.0.1:8080',
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/yaci-store/u, '/api/v1'),
+        configure: (proxy) => {
+          proxy.on('error', (err: NodeJS.ErrnoException, _req: IncomingMessage, res: ServerResponse | unknown) => {
+            const r = res as ServerResponse;
+            if (r?.writeHead && !r.headersSent) {
+              r.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+              r.end(
+                `Yaci Store unreachable (${err.code ?? err.message ?? 'ECONNREFUSED'}). Start Yaci DevKit / Store on port 8080 (see repo docs/CARDANO_LOCAL_YACI.md).`,
+              );
+            }
+          });
+        },
       },
     },
   },

@@ -11,7 +11,6 @@ import type { LockSpendParams } from '../params.js';
  */
 export async function submitRelease(ctx: BridgeContext, p: LockSpendParams): Promise<{ txHash: string }> {
   const { scriptCbor } = getLockPoolScript(ctx.blueprint, ctx.networkId);
-  const datum = buildLockDatum(p);
   const signerHash =
     p.bridgeOperatorVkeyHashHex56 === null
       ? p.recipientVkeyHashHex56
@@ -29,7 +28,7 @@ export async function submitRelease(ctx: BridgeContext, p: LockSpendParams): Pro
   const payoutAddress = process.env.LOCK_RELEASE_TO_ADDRESS ?? walletUsed;
 
   const txBuilder = getTxBuilder(ctx);
-  await txBuilder
+  const step = txBuilder
     .spendingPlutusScript('V3')
     .txIn(
       scriptUtxo.input.txHash,
@@ -38,8 +37,10 @@ export async function submitRelease(ctx: BridgeContext, p: LockSpendParams): Pro
       scriptUtxo.output.address,
     )
     .txInScript(scriptCbor)
-    .txInRedeemerValue(redeemerBridgeRelease)
-    .txInDatumValue(datum)
+    .txInRedeemerValue(redeemerBridgeRelease);
+  if (scriptUtxo.output.plutusData) step.txInInlineDatumPresent();
+  else step.txInDatumValue(buildLockDatum(p));
+  await step
     .requiredSignerHash(signerHash)
     .txOut(payoutAddress, scriptUtxo.output.amount)
     .changeAddress(walletUsed)

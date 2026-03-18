@@ -1,3 +1,12 @@
+async function readYaciErrorBody(r: Response): Promise<string> {
+  try {
+    const t = await r.text();
+    return t.trim().slice(0, 400);
+  } catch {
+    return '';
+  }
+}
+
 /** Blockfrost-compatible base URL for browser fetches (handles Vite `/yaci-store` proxy). */
 export function resolveYaciStoreBaseUrl(): string | null {
   const raw = import.meta.env.VITE_YACI_STORE_URL?.trim();
@@ -7,6 +16,23 @@ export function resolveYaciStoreBaseUrl(): string | null {
     return `${window.location.origin}${raw}`;
   }
   return raw;
+}
+
+const YACI_PROBE_TIMEOUT_MS = 4000;
+
+/** Single cheap request to see if Yaci Store (or the Vite proxy to it) is up. Avoids hammering `/addresses/.../utxos` when the backend is down. */
+export async function isYaciStoreReachable(yaciStoreBaseUrl: string): Promise<boolean> {
+  const base = yaciStoreBaseUrl.trim().replace(/\/+$/u, '');
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), YACI_PROBE_TIMEOUT_MS);
+  try {
+    const r = await fetch(`${base}/blocks/latest`, { signal: ac.signal });
+    return r.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 /**
@@ -21,7 +47,14 @@ export async function fetchYaciAddressAda(params: { yaciStoreBaseUrl: string; be
   for (let page = 1; page < 10_000; page++) {
     const r = await fetch(`${base}/addresses/${enc}/utxos?page=${page}`);
     if (!r.ok) {
-      throw new Error(`Yaci Store UTxOs: HTTP ${r.status}`);
+      const detail = await readYaciErrorBody(r);
+      const hint =
+        r.status === 503 || r.status === 502 || r.status === 500
+          ? ' Start Yaci Store on http://127.0.0.1:8080 (or set VITE_YACI_STORE_URL to a running API). See docs/CARDANO_LOCAL_YACI.md.'
+          : '';
+      throw new Error(
+        `Yaci Store UTxOs: HTTP ${r.status}${detail ? ` — ${detail}` : ''}.${hint}`,
+      );
     }
     const j = (await r.json()) as unknown;
     if (!Array.isArray(j)) {
@@ -53,7 +86,14 @@ export async function fetchYaciAddressNativeAssetQuantity(params: {
 
   for (let page = 1; page < 10_000; page++) {
     const r = await fetch(`${base}/addresses/${enc}/utxos?page=${page}`);
-    if (!r.ok) throw new Error(`Yaci Store UTxOs: HTTP ${r.status}`);
+    if (!r.ok) {
+      const detail = await readYaciErrorBody(r);
+      const hint =
+        r.status === 503 || r.status === 502 || r.status === 500
+          ? ' Start Yaci on :8080 or fix VITE_YACI_STORE_URL. See docs/CARDANO_LOCAL_YACI.md.'
+          : '';
+      throw new Error(`Yaci Store UTxOs: HTTP ${r.status}${detail ? ` — ${detail}` : ''}.${hint}`);
+    }
     const j = (await r.json()) as unknown;
     if (!Array.isArray(j)) throw new Error('Yaci Store: unexpected UTxO response');
     if (j.length === 0) break;

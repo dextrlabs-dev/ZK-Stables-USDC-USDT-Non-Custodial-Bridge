@@ -6,6 +6,7 @@ import type { BridgeIntent, BurnIntent } from '../types.js';
 import {
   computeCardanoBurnEventCommitmentDigest,
   computeDepositCommitmentDigest,
+  computeMidnightBurnEventCommitmentDigest,
   parseLockNonceDecimal,
   type DepositCommitmentParams,
 } from './cardanoEncoding.js';
@@ -146,6 +147,33 @@ export function computeBurnDepositCommitmentHexFromIntent(intent: BridgeIntent, 
       txHashHex: c.txHash,
       outputIndex: c.outputIndex,
       burnCommitmentHex: bc,
+    });
+    const digest = computeDepositCommitmentDigest({
+      operationType: 1,
+      sourceChainId: zkSrc,
+      destinationChainId: zkDest,
+      amountRaw,
+      assetCode,
+      lockNonce,
+      nonceCommitment,
+      eventCommitment,
+    });
+    return digest.toString('hex');
+  }
+
+  if (intent.sourceChain === 'midnight') {
+    const mid = intent.source?.midnight;
+    const txIdRaw = mid?.txId?.trim() || mid?.txHash?.trim();
+    if (!txIdRaw) return undefined;
+    const destChainId =
+      mid?.destChainId !== undefined
+        ? Number(mid.destChainId)
+        : zkChainIdFromEnv('RELAYER_ZK_DEST_CHAIN_ID', zkDest);
+    const lockNonce = parseLockNonceDecimal(mid?.lockNonce);
+    const eventCommitment = computeMidnightBurnEventCommitmentDigest({
+      destChainId,
+      recipientCommHex: bc,
+      midnightTxIdHex: txIdRaw,
     });
     const digest = computeDepositCommitmentDigest({
       operationType: 1,

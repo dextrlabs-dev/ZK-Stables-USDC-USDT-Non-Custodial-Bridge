@@ -11,9 +11,38 @@ export const ReviewSheet: React.FC<{
   sourceChain: string;
   destChain: string;
   asset: string;
+  /** For redeem flow: zkUSDC / zkUSDT (burned on-chain). */
+  zkAssetLabel?: string;
   amount: string;
   recipient: string;
-}> = ({ open, onClose, onConfirm, confirming, operation, sourceChain, destChain, asset, amount, recipient }) => (
+  redeemBurnStatus?:
+    | 'n/a'
+    | 'non-evm'
+    | 'evm-pending'
+    | 'evm-ready'
+    | 'cardano-pending'
+    | 'cardano-ready'
+    | 'midnight-pending'
+    | 'midnight-ready';
+  burnTxSummary?: string;
+  /** When true, underlying stable is paid on EVM after a Cardano/Midnight zk burn. */
+  crossChainRedeemToEvm?: boolean;
+}> = ({
+  open,
+  onClose,
+  onConfirm,
+  confirming,
+  operation,
+  sourceChain,
+  destChain,
+  asset,
+  zkAssetLabel,
+  amount,
+  recipient,
+  redeemBurnStatus = 'n/a',
+  burnTxSummary,
+  crossChainRedeemToEvm = false,
+}) => (
   <Dialog
     open={open}
     onClose={onClose}
@@ -27,21 +56,43 @@ export const ReviewSheet: React.FC<{
     <DialogContent className="!px-6 !pb-2">
       <p className="text-sm leading-relaxed text-slate-600">
         {operation === 'LOCK'
-          ? 'Lock on the source chain. The relayer observes finality, then you complete mint on the destination.'
-          : 'Burn on the source chain. After proof, funds unlock to your recipient on that chain.'}
+          ? 'Lock USDC/USDT on EVM. The relayer observes finality, then mints or credits zk on your destination chain.'
+          : crossChainRedeemToEvm
+            ? `Redeem: you burn ${zkAssetLabel ?? 'zk stable'} on ${sourceChain}; the relayer verifies the anchor, then pays ${asset} (underlying) on EVM to your 0x recipient.`
+            : `Redeem: you burn ${zkAssetLabel ?? 'zk stable'} on EVM; the relayer verifies the burn, then unlocks ${asset} (underlying) to your recipient.`}
       </p>
       <dl className="mt-4 space-y-3 border-t border-slate-100 pt-4">
-        <Row label="Flow" value={operation === 'LOCK' ? 'Lock → Mint' : 'Burn → Unlock'} />
+        <Row label="Flow" value={operation === 'LOCK' ? 'Lock → Mint' : 'Burn zk → Unlock USDC/USDT'} />
         <Row label="From" value={sourceChain} />
         {operation === 'LOCK' ? <Row label="To" value={destChain} /> : null}
-        <Row label="Asset" value={asset} />
-        <Row label="Amount" value={amount} />
+        <Row label={operation === 'LOCK' ? 'Asset' : 'Burn / unlock'} value={operation === 'LOCK' ? asset : `${zkAssetLabel ?? 'zk'} → ${asset}`} />
+        <Row label={operation === 'BURN' ? 'Amount (burn + unlock)' : 'Amount'} value={amount} />
         <Row
           label="Recipient"
           value={recipient.length > 36 ? shortenAddress(recipient) : recipient}
           mono
           full={recipient.length > 36 ? recipient : undefined}
         />
+        {redeemBurnStatus !== 'n/a' ? (
+          <Row
+            label="On-chain anchor"
+            value={
+              redeemBurnStatus === 'non-evm'
+                ? 'Legacy stub (avoid — use chain-specific flow)'
+                : redeemBurnStatus === 'evm-ready'
+                  ? `${burnTxSummary ?? 'Tx'} · linked to intent`
+                  : redeemBurnStatus === 'cardano-ready'
+                    ? 'Cardano lock spent (BridgeRelease) · commitment bound'
+                    : redeemBurnStatus === 'midnight-ready'
+                      ? 'Midnight initiateBurn · tx bound'
+                      : redeemBurnStatus === 'cardano-pending'
+                        ? 'Complete Cardano BridgeRelease + lock ref first'
+                        : redeemBurnStatus === 'midnight-pending'
+                          ? 'Run initiateBurn (Developer tools) or fill anchor first'
+                          : 'Complete wallet burn first'
+            }
+          />
+        ) : null}
       </dl>
     </DialogContent>
     <DialogActions className="!border-t !border-slate-100 !px-6 !py-4">

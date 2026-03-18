@@ -1,5 +1,7 @@
 # Test reports
 
+**Human-readable summary:** [../TEST_REPORT.md](../TEST_REPORT.md) (bridge process, per-chain tx hashes, relayer jobs, CI overview). This page focuses on **machine-readable** artifacts and local regeneration commands.
+
 ## Continuous integration
 
 On each push or pull request, [.github/workflows/ci.yml](../../.github/workflows/ci.yml) uploads an artifact named **test-reports** containing:

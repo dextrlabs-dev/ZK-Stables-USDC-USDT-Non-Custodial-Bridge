@@ -23,13 +23,30 @@ async function main() {
   await pool.waitForDeployment();
 
   const Wrapped = await ethers.getContractFactory("ZkStablesWrappedToken");
-  const wUSDC = await Wrapped.deploy("Wrapped USDC", "wUSDC", 6, await bridgeMint.getAddress());
+  // Symbols zkUSDC / zkUSDT: proof-verified bridge mint on destination, not same-chain “wrap”.
+  const wUSDC = await Wrapped.deploy("ZK USDC", "zkUSDC", 6, await bridgeMint.getAddress());
   await wUSDC.waitForDeployment();
-  const wUSDT = await Wrapped.deploy("Wrapped USDT", "wUSDT", 6, await bridgeMint.getAddress());
+  const wUSDT = await Wrapped.deploy("ZK USDT", "zkUSDT", 6, await bridgeMint.getAddress());
   await wUSDT.waitForDeployment();
 
   await (await usdc.mint(deployer.address, 1_000_000_000)).wait();
   await (await usdt.mint(deployer.address, 1_000_000_000)).wait();
+
+  // Seed zkUSDC / zkUSDT for the first Hardhat accounts (UI mock wallets) so REDEEM → burn works without a prior LOCK→mint.
+  const signers = await ethers.getSigners();
+  const seedAccounts = signers.slice(0, 3);
+  const seedAmount = 1_000_000_000n; // 1000 units @ 6 decimals each
+  for (let i = 0; i < seedAccounts.length; i++) {
+    const to = seedAccounts[i].address;
+    const nDc = ethers.id(`zkstables-anvil-seed-wusdc-${i}`);
+    const nDt = ethers.id(`zkstables-anvil-seed-wusdt-${i}`);
+    await (
+      await bridgeMint.mintWrapped(await wUSDC.getAddress(), to, seedAmount, nDc, "0x", ethers.ZeroHash)
+    ).wait();
+    await (
+      await bridgeMint.mintWrapped(await wUSDT.getAddress(), to, seedAmount, nDt, "0x", ethers.ZeroHash)
+    ).wait();
+  }
 
   // Optional: seed an additional recipient to demo end-to-end flows without relying on an unowned address.
   const demoRecipient = process.env.DEMO_RECIPIENT;

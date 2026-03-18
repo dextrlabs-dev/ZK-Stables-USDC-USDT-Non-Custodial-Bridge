@@ -1,7 +1,8 @@
 /**
  * Display-friendly shortening for EVM, Cardano bech32, and Midnight mn_* addresses.
  */
-export function shortenAddress(addr: string, opts?: { head?: number; tail?: number }): string {
+export function shortenAddress(addr: string | null | undefined, opts?: { head?: number; tail?: number }): string {
+  if (addr == null || typeof addr !== 'string') return '—';
   const t = addr.trim();
   if (!t) return '—';
   const head = opts?.head;

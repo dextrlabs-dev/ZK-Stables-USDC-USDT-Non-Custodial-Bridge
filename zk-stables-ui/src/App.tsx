@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Accordion, AccordionDetails, AccordionSummary, Box, Container, Link, Stack, Typography } from '@mui/material';
 import pino from 'pino';
@@ -14,10 +14,12 @@ import { EvmWalletCard } from './components/EvmWalletCard.js';
 import { FullDemoRundown } from './components/FullDemoRundown.js';
 import { TxLog } from './components/TxLog.js';
 
-/** Logger for Midnight (bridge card ledger + developer tools). */
-const devMidnightLogger = pino({ level: import.meta.env.DEV ? 'info' : 'silent' });
-
 const App: React.FC = () => {
+  const devMidnightLogger = useMemo(
+    () => pino({ level: import.meta.env.DEV ? 'info' : 'silent' }),
+    [],
+  );
+
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     // eslint-disable-next-line no-console
