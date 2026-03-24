@@ -1,9 +1,11 @@
-import { BrowserWallet, MeshTxBuilder, deserializeAddress } from '@meshsdk/core';
+import { MeshTxBuilder, deserializeAddress } from '@meshsdk/core';
 import type { Asset, Data, IEvaluator } from '@meshsdk/common';
 import { parseUnits } from 'viem';
 import { fetchCardanoBridgeMetadata } from './bridgeMetadata.js';
 import { buildLockDatumMesh } from './plutusLockDatum.js';
 import { createBrowserCardanoIndexer, type CardanoIndexer } from './meshCardanoIndexer.js';
+import { resolveBridgeSigningWallet } from './resolveBridgeSigningWallet.js';
+import { fetchUTxOsWithRetry } from './fetchUTxOsWithRetry.js';
 
 /** Policy id (56 hex) + asset name hex = Mesh `unit`. */
 export function splitCardanoNativeUnit(fullUnit: string): { policyIdHex: string; assetNameHex: string } {
@@ -41,6 +43,8 @@ function randomUint64(): bigint {
  */
 export async function browserLockZkAtBridgeScript(opts: {
   cip30WalletKey: string;
+  /** Use `MeshWallet` + `VITE_DEMO_CARDANO_WALLET_MNEMONIC` when `cip30WalletKey === 'demo'`. */
+  useDemoMnemonicWallet?: boolean;
   relayerBaseUrl: string;
   asset: 'USDC' | 'USDT';
   /** Human amount (e.g. "10.5") — scaled by `VITE_CARDANO_NATIVE_DECIMALS` (default 6). */
@@ -86,7 +90,10 @@ export async function browserLockZkAtBridgeScript(opts: {
   }
 
   const meta = await fetchCardanoBridgeMetadata(opts.relayerBaseUrl);
-  const wallet = await BrowserWallet.enable(opts.cip30WalletKey);
+  const wallet = await resolveBridgeSigningWallet({
+    cip30WalletKey: opts.cip30WalletKey,
+    useDemoMnemonicWallet: Boolean(opts.useDemoMnemonicWallet),
+  });
 
   const used = await wallet.getUsedAddresses();
   const addr0 = used[0]?.trim();
@@ -98,10 +105,8 @@ export async function browserLockZkAtBridgeScript(opts: {
     throw new Error(`Unexpected payment key hash length (${vkh56.length}), expected 56 hex chars.`);
   }
 
-  const lockNonce =
-    opts.lockNonceDecimal?.trim() !== ''
-      ? BigInt(opts.lockNonceDecimal!.trim())
-      : randomUint64();
+  const rawNonce = opts.lockNonceDecimal?.trim();
+  const lockNonce = rawNonce ? BigInt(rawNonce) : randomUint64();
 
   const optComm = opts.recipientCommitmentHex64?.replace(/^0x/i, '').trim().toLowerCase();
   let recipientCommitmentHex: string;
@@ -168,7 +173,7 @@ export async function browserLockZkAtBridgeScript(opts: {
   if (!txHash) throw new Error('submitTx returned empty');
 
   const submitted = txHash.replace(/^0x/i, '').trim().toLowerCase();
-  const utxosAt = await fetcher.fetchUTxOs(submitted);
+  const utxosAt = await fetchUTxOsWithRetry(fetcher, submitted, undefined, 'Lock at bridge (post-submit)');
   const atScript = utxosAt.find((u) => u.output.address === meta.lockScriptAddress);
   const outputIndex = atScript?.input.outputIndex ?? 0;
 

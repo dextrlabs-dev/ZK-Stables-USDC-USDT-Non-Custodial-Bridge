@@ -77,3 +77,16 @@ export function releaseCardanoUtxo(key: string): void {
 export function isCardanoUtxoInflightOrDone(key: string): boolean {
   return processedCardanoUtxos.has(key) || inflightCardanoKeys.has(key);
 }
+
+const usedBurnCommitments = new Set<string>();
+
+export function reserveBurnCommitment(hex64: string): boolean {
+  const key = hex64.toLowerCase();
+  if (usedBurnCommitments.has(key)) return false;
+  usedBurnCommitments.add(key);
+  return true;
+}
+
+export function releaseBurnCommitment(hex64: string): void {
+  usedBurnCommitments.delete(hex64.toLowerCase());
+}

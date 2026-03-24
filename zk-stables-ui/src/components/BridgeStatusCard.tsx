@@ -55,51 +55,27 @@ export const BridgeStatusCard: React.FC = () => {
         )}
         {ledger && (
           <Stack component="dl" spacing={0} sx={{ m: 0 }}>
-            <StateRow label="State">
+            <StateRow label="Bridge operator">
+              <Typography variant="body2" component="div" sx={{ wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                {ledger.bridgeOperatorHex.slice(0, 16)}…
+              </Typography>
+            </StateRow>
+            <StateRow label="Total deposits">
               <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {ledger.stateLabel}
+                {ledger.depositCount}
               </Typography>
             </StateRow>
-            <StateRow label="Asset">
-              <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {ledger.assetKind === 0 ? 'USDC' : 'USDT'}
-              </Typography>
-            </StateRow>
-            <StateRow label="Amount">
-              <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {ledger.amount.toString()}
-              </Typography>
-            </StateRow>
-            <StateRow label="Source chain id">
-              <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {ledger.sourceChainId.toString()}
-              </Typography>
-            </StateRow>
-            <StateRow label="Dest chain id">
-              <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {ledger.destChainId.toString()}
-              </Typography>
-            </StateRow>
-            <StateRow label="Minted unshielded">
-              <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {String(ledger.mintedUnshielded)}
-              </Typography>
-            </StateRow>
-            <StateRow label="Unshielded released">
-              <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                {String(ledger.unshieldedReleased)}
-              </Typography>
-            </StateRow>
-            <StateRow label="Deposit commitment">
-              <Typography variant="dataMono" component="div" sx={{ wordBreak: 'break-all' }}>
-                {ledger.depositCommitmentHex}
-              </Typography>
-            </StateRow>
-            <StateRow label="Recipient commitment">
-              <Typography variant="dataMono" component="div" sx={{ wordBreak: 'break-all' }}>
-                {ledger.recipientCommitmentHex}
-              </Typography>
-            </StateRow>
+            {ledger.deposits.map((dep) => (
+              <Box key={dep.depositCommitmentHex} sx={{ pl: 1, py: 0.5, borderLeft: 2, borderColor: 'divider', mb: 1 }}>
+                <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                  {dep.depositCommitmentHex.slice(0, 16)}…
+                </Typography>
+                <Typography variant="body2">{dep.statusLabel} · {dep.assetKind === 0 ? 'USDC' : 'USDT'} · {dep.amount.toString()}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  minted={String(dep.mintedUnshielded)} released={String(dep.unshieldedReleased)}
+                </Typography>
+              </Box>
+            ))}
           </Stack>
         )}
       </CardContent>

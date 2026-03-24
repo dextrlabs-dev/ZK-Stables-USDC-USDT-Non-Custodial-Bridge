@@ -13,3 +13,30 @@ export function parseDecimalAmountToUnits(amountStr: string, decimals: number): 
   const bi = BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac || '0');
   return neg ? -bi : bi;
 }
+
+const DIGITS_ONLY = /^\d+$/u;
+
+/**
+ * Normalize relayer intent `amount` strings to raw token units.
+ * Watchers emit digit-only strings (on-chain quantities). HTTP/UI intents use decimal human amounts (e.g. "11948.7").
+ */
+export function intentAmountToTokenUnits(
+  amountStr: string,
+  opts: {
+    operation: 'LOCK' | 'BURN';
+    sourceChain: 'evm' | 'cardano' | 'midnight';
+    /** True when this BURN was ingested from an EVM `Burned` log (`amount` is already raw units). */
+    evmBurnFromChainLog?: boolean;
+  },
+): bigint {
+  const decimals = Number(process.env.RELAYER_EVM_TOKEN_DECIMALS ?? process.env.RELAYER_CARDANO_ASSET_DECIMALS ?? 6);
+  const s = amountStr.trim().replace(/,/g, '');
+  if (!s) throw new Error('empty amount');
+  if (opts.operation === 'BURN' && opts.sourceChain === 'evm' && opts.evmBurnFromChainLog && DIGITS_ONLY.test(s)) {
+    return BigInt(s);
+  }
+  if (opts.operation === 'LOCK' && opts.sourceChain === 'cardano' && DIGITS_ONLY.test(s)) {
+    return BigInt(s);
+  }
+  return parseDecimalAmountToUnits(s, decimals);
+}

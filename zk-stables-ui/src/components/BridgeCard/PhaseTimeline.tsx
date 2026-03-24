@@ -1,4 +1,4 @@
-import React, { Fragment } from 'react';
+import React, { Fragment, useMemo } from 'react';
 import type { RelayerJobApi } from '../../lib/relayerClient.js';
 import { cn } from '../../utils/cn.js';
 
@@ -9,6 +9,22 @@ const STEPS: { key: string; label: string; short: string }[] = [
   { key: 'destination_handoff', label: 'Handoff', short: '4' },
   { key: 'completed', label: 'Done', short: '5' },
 ];
+
+function deriveFinalityTooltip(job: RelayerJobApi): string | null {
+  const pl = job.ui?.phaseLabel ?? '';
+  const sc = (job.intent as { sourceChain?: string }).sourceChain;
+  if (pl.includes('evm_finality') || sc === 'evm') {
+    return 'EVM: real block confirmations (N-block polling)';
+  }
+  if (pl.includes('cardano_finality')) {
+    const method = pl.includes('yaci') ? 'Yaci indexer' : pl.includes('blockfrost') ? 'Blockfrost' : 'indexer';
+    return `Cardano: real block confirmations (${method})`;
+  }
+  if (pl.includes('midnight_finality') || sc === 'midnight') {
+    return 'Midnight: block-time confirmations';
+  }
+  return null;
+}
 
 function stepVisualState(job: RelayerJobApi, stepIndex: number): 'done' | 'active' | 'pending' | 'fail' {
   const failed = job.phase === 'failed';
@@ -29,6 +45,7 @@ function stepVisualState(job: RelayerJobApi, stepIndex: number): 'done' | 'activ
 export const PhaseTimeline: React.FC<{ job: RelayerJobApi; className?: string }> = ({ job, className }) => {
   const failed = job.phase === 'failed';
   const label = job.ui?.phaseLabel ?? job.phase;
+  const finalityTip = useMemo(() => deriveFinalityTooltip(job), [job]);
 
   return (
     <div className={cn('relative', className)}>
@@ -73,7 +90,7 @@ export const PhaseTimeline: React.FC<{ job: RelayerJobApi; className?: string }>
                     st === 'pending' && 'border-slate-200 bg-white text-slate-400',
                     st === 'fail' && 'border-red-500 bg-red-50 text-red-700',
                   )}
-                  title={s.label}
+                  title={s.key === 'awaiting_finality' && finalityTip ? `${s.label}: ${finalityTip}` : s.label}
                 >
                   {st === 'done' ? (
                     <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
@@ -85,7 +102,12 @@ export const PhaseTimeline: React.FC<{ job: RelayerJobApi; className?: string }>
                     s.short
                   )}
                 </div>
-                <p className="mt-1.5 max-w-[4.5rem] text-center text-[8px] font-semibold leading-tight text-slate-600 min-[380px]:text-[9px]">{s.label}</p>
+                <p
+                  className="mt-1.5 max-w-[4.5rem] text-center text-[8px] font-semibold leading-tight text-slate-600 min-[380px]:text-[9px]"
+                  title={s.key === 'awaiting_finality' && finalityTip ? finalityTip : undefined}
+                >
+                  {s.label}
+                </p>
               </div>
             </Fragment>
           );

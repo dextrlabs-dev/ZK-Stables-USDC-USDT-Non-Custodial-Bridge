@@ -1,4 +1,4 @@
-import type { BridgeIntent } from '../types.js';
+import type { BridgeIntent, BurnIntent } from '../types.js';
 import { cardanoUtxoDedupeKey, evmEventDedupeKey } from '../store.js';
 
 export function evmDedupeKeyFromIntent(intent: BridgeIntent): string | undefined {
@@ -14,11 +14,19 @@ export function cardanoDedupeKeyFromIntent(intent: BridgeIntent): string | undef
   return cardanoUtxoDedupeKey(c.txHash, c.outputIndex);
 }
 
-export type BridgeDedupeKeys = { evm?: string; cardano?: string };
+export function burnCommitmentDedupeKey(intent: BridgeIntent): string | undefined {
+  if (intent.operation !== 'BURN') return undefined;
+  const bc = (intent as BurnIntent).burnCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase();
+  if (!bc || bc.length !== 64 || !/^[0-9a-f]+$/u.test(bc)) return undefined;
+  return bc;
+}
+
+export type BridgeDedupeKeys = { evm?: string; cardano?: string; burnCommitment?: string };
 
 export function bridgeDedupeKeysFromIntent(intent: BridgeIntent): BridgeDedupeKeys {
   return {
     evm: evmDedupeKeyFromIntent(intent),
     cardano: cardanoDedupeKeyFromIntent(intent),
+    burnCommitment: burnCommitmentDedupeKey(intent),
   };
 }

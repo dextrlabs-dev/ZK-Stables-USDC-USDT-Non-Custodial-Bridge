@@ -8,9 +8,15 @@ import * as Rx from 'rxjs';
 import type { WalletContext } from './wallet.js';
 import type { RelayerMidnightConfig } from './config.js';
 import type { ZkStablesPrivateState } from '@zk-stables/midnight-contract';
-import { ZkStables, zkStablesPrivateStateId } from '@zk-stables/midnight-contract';
+import {
+  ZkStables,
+  ZkStablesRegistry,
+  zkStablesPrivateStateId,
+  zkStablesRegistryPrivateStateId,
+} from '@zk-stables/midnight-contract';
 
 type ZkStablesCircuitId = keyof ZkStables.ProvableCircuits<any>;
+type ZkStablesRegistryCircuitId = keyof ZkStablesRegistry.ProvableCircuits<any>;
 
 const debug = (msg: string, extra?: Record<string, unknown>) => {
   if (process.env.MIDNIGHT_LOCAL_CLI_DEBUG === '1' || process.env.MIDNIGHT_LOCAL_CLI_DEBUG === 'true') {
@@ -188,6 +194,7 @@ export async function configureMidnightContractProviders<
     artifactsDir: string;
     privateStateStoreName: string;
     privateStateId: PrivateStateId;
+    midnightDbName: string;
   },
 ) {
   const lastSubmitted: LastSubmittedTxIdentifiers = { ids: [] };
@@ -197,6 +204,7 @@ export async function configureMidnightContractProviders<
   return {
     privateStateProvider: levelPrivateStateProvider<PrivateStateId>({
       ...DEFAULT_CONFIG,
+      midnightDbName: options.midnightDbName,
       privateStateStoreName: options.privateStateStoreName,
       privateStoragePasswordProvider: async () => ldbPassword(),
       accountId: walletAndMidnightProvider.getCoinPublicKey(),
@@ -210,11 +218,27 @@ export async function configureMidnightContractProviders<
 }
 
 export async function configureZkStablesProviders(ctx: WalletContext, config: RelayerMidnightConfig) {
+  config.ensureMidnightLevelDbDirectory();
   return configureMidnightContractProviders<typeof zkStablesPrivateStateId, ZkStablesCircuitId>(ctx, config, {
     artifactsDir: config.zkStablesArtifactsDir,
     privateStateStoreName: config.privateStateStoreName,
     privateStateId: zkStablesPrivateStateId,
+    midnightDbName: config.midnightLevelDbName,
   });
+}
+
+export async function configureZkStablesRegistryProviders(ctx: WalletContext, config: RelayerMidnightConfig) {
+  config.ensureMidnightLevelDbDirectory();
+  return configureMidnightContractProviders<typeof zkStablesRegistryPrivateStateId, ZkStablesRegistryCircuitId>(
+    ctx,
+    config,
+    {
+      artifactsDir: config.zkStablesRegistryArtifactsDir,
+      privateStateStoreName: config.registryPrivateStateStoreName,
+      privateStateId: zkStablesRegistryPrivateStateId,
+      midnightDbName: config.midnightLevelDbName,
+    },
+  );
 }
 
 export type { ZkStablesPrivateState };

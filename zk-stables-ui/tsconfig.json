@@ -17,7 +17,9 @@
     "paths": {
       "@/*": ["src/*"],
       "@contract/zk-stables": ["../contract/dist/managed/zk-stables/contract/index.js"],
-      "@contract/witnesses-zk-stables": ["../contract/dist/witnesses-zk-stables.js"]
+      "@contract/witnesses-zk-stables": ["../contract/dist/witnesses-zk-stables.js"],
+      "@contract/zk-stables-registry": ["../contract/dist/managed/zk-stables-registry/contract/index.js"],
+      "@contract/witnesses-zk-stables-registry": ["../contract/dist/witnesses-registry.js"]
     }
   },
   "include": ["src"]

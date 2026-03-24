@@ -4,6 +4,7 @@
  *
  * Usage:
  *   DEPLOY_ADDRS_JSON=/tmp/zk-stables-anvil-addrs.json npx hardhat run scripts/integration-emit-lock.js --network localhost
+ * Optional: LOCK_TOKEN=usdt (default usdc) to lock mock USDT instead of USDC.
  */
 const fs = require("fs");
 const { ethers } = require("hardhat");
@@ -15,17 +16,42 @@ async function main() {
   const recipient = process.env.LOCK_RECIPIENT_EVM || signer.address;
   const amount = BigInt(process.env.LOCK_AMOUNT_RAW || "1000000"); // 1 USDC @ 6 decimals
 
-  const usdc = await ethers.getContractAt("MockERC20", addrs.usdc);
+  const tokenKey = (process.env.LOCK_TOKEN || "usdc").toLowerCase() === "usdt" ? "usdt" : "usdc";
+  const tokenAddr = tokenKey === "usdt" ? addrs.usdt : addrs.usdc;
+  const erc20 = await ethers.getContractAt("MockERC20", tokenAddr);
   const pool = await ethers.getContractAt("ZkStablesPoolLock", addrs.poolLock);
 
-  const nonce = ethers.keccak256(ethers.toUtf8Bytes(`zk-stables-integration-${Date.now()}`));
+  const nonce = ethers.keccak256(
+    ethers.toUtf8Bytes(`zk-stables-integration-${tokenKey}-${Date.now()}`),
+  );
 
-  await (await usdc.approve(addrs.poolLock, amount)).wait();
-  const tx = await pool.lock(addrs.usdc, amount, recipient, nonce);
+  await (await erc20.approve(addrs.poolLock, amount)).wait();
+  const tx = await pool.lock(tokenAddr, amount, recipient, nonce);
   const receipt = await tx.wait();
 
+  let logIndex = null;
+  const poolLc = String(addrs.poolLock).toLowerCase();
+  for (const log of receipt.logs) {
+    if (String(log.address).toLowerCase() !== poolLc) continue;
+    try {
+      const parsed = pool.interface.parseLog({ topics: log.topics, data: log.data });
+      if (parsed?.name === "Locked") {
+        logIndex = log.index;
+        break;
+      }
+    } catch (_) {
+      /* not Locked */
+    }
+  }
+  if (logIndex === null) {
+    throw new Error("ZkStablesPoolLock Locked event not found in receipt logs");
+  }
+
   const out = {
+    token: tokenKey,
+    underlyingToken: tokenAddr,
     txHash: receipt.hash,
+    logIndex,
     blockNumber: receipt.blockNumber.toString(),
     recipient,
     amount: amount.toString(),

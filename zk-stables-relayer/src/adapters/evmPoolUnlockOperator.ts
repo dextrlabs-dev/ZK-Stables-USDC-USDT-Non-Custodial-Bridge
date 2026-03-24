@@ -2,6 +2,7 @@ import { createPublicClient, createWalletClient, http } from 'viem';
 import { foundry } from 'viem/chains';
 import type { Address, Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { assertPoolUnderlyingSufficient } from './evmPoolUnderlyingCheck.js';
 
 const poolAbi = [
   {
@@ -33,6 +34,12 @@ export async function evmPoolUnlockOperator(params: {
   /** 32-byte value, typically `burnCommitmentHex` from the off-chain burn anchor. */
   burnCommitment: Hex;
 }): Promise<{ txHash: Hex }> {
+  await assertPoolUnderlyingSufficient({
+    rpcUrl: params.rpcUrl,
+    poolLock: params.poolLock,
+    underlyingToken: params.underlyingToken,
+    amount: params.amount,
+  });
   const account = privateKeyToAccount(params.privateKey);
   const client = createWalletClient({ chain: foundry, transport: http(params.rpcUrl), account });
 

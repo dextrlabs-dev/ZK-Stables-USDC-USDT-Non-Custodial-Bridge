@@ -2,6 +2,7 @@
  * EVM burn `event_commitment` + outer `depositCommitment` for BURN_UNLOCK (see contract/docs/DEPOSIT_COMMITMENT_ENCODING.md).
  */
 import { createHash } from 'node:crypto';
+import { intentAmountToTokenUnits } from '../adapters/amount.js';
 import type { BridgeIntent, BurnIntent } from '../types.js';
 import {
   computeCardanoBurnEventCommitmentDigest,
@@ -106,7 +107,13 @@ export function computeBurnDepositCommitmentHexFromIntent(intent: BridgeIntent, 
   const nonceCommitment = createHash('sha256').update(Buffer.from(lockRef, 'utf8')).digest();
   const zkSrc = zkChainIdFromEnv('RELAYER_ZK_SOURCE_CHAIN_ID', 0);
   const zkDest = zkChainIdFromEnv('RELAYER_ZK_DEST_CHAIN_ID', 0);
-  const amountRaw = BigInt(intent.amount);
+  const evmBurnLog =
+    intent.sourceChain === 'evm' && Boolean(intent.source?.evm && typeof intent.source.evm.txHash === 'string');
+  const amountRaw = intentAmountToTokenUnits(String(intent.amount), {
+    operation: 'BURN',
+    sourceChain: intent.sourceChain,
+    evmBurnFromChainLog: evmBurnLog,
+  });
   const assetCode = intent.assetKind;
 
   if (intent.sourceChain === 'evm' && intent.source?.evm?.wrappedTokenAddress && intent.source.evm.fromAddress && intent.source.evm.nonce) {

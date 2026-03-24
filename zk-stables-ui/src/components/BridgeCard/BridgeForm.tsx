@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useConnection, usePublicClient, useReadContract, useWriteContract } from 'wagmi';
+import { useConnection, useConnect, usePublicClient, useReadContract, useSwitchChain, useWriteContract } from 'wagmi';
 import { formatUnits, isAddress, parseUnits, type Address, type Hex } from 'viem';
+import { hardhat } from 'viem/chains';
 import { parseEnvEthereumAddress } from '../../utils/envAddress.js';
 import { useCrossChainWallets, type SourceChainKind } from '../../contexts/CrossChainWalletContext.js';
 import { useZkStables } from '../../hooks/useZkStables.js';
 import { browserLockZkAtBridgeScript } from '../../cardano/browserLockZkAtBridgeScript.js';
 import { sumWalletNativeUnitBalance } from '../../cardano/cardanoWalletZkBalance.js';
+import { fetchYaciAddressNativeAssetQuantity, resolveYaciStoreBaseUrl } from '../../lib/yaciAddressBalance.js';
 import { discoverCardanoBridgeLocks, type CardanoBridgeLockCandidate } from '../../cardano/discoverBridgeLockUtxos.js';
 import { userWalletBridgeReleaseLockUtxo } from '../../cardano/userBridgeRelease.js';
+import { isDemoCardanoMnemonicConfigured } from '../../cardano/demoMnemonicMeshWallet.js';
 import {
   assetKindForLabel,
   getRelayerJob,
@@ -22,9 +25,13 @@ import { WalletPill, type ChainVisual } from './WalletPill.js';
 import { BridgeChainRow } from './BridgeChainRow.js';
 import { ReviewSheet } from './ReviewSheet.js';
 import { cn } from '../../utils/cn.js';
+import { demoWalletsEnabled } from '../../demo/constants.js';
 import {
   erc20BalanceOfAbi,
+  erc20ApproveAbi,
+  poolLockAbi,
   parseBurnedFromReceipt,
+  parseLockedFromReceipt,
   randomBytes32Hex,
   formatZkBurnWalletError,
   zkStableBurnAbi,
@@ -67,12 +74,27 @@ export const BridgeForm: React.FC<{
   relayerUrl: string;
   onJobUpdate: (job: RelayerJobApi | null) => void;
 }> = ({ demo, relayerUrl, onJobUpdate }) => {
-  const { address: evmAddress, isConnected: evmConnected, status: evmStatus } = useConnection();
+  const {
+    address: evmAddress,
+    isConnected: evmConnected,
+    status: evmStatus,
+    connector: evmConnector,
+    chain: evmChain,
+  } = useConnection();
+  const { connectors, connect, isPending: evmConnectPending, error: evmConnectError } = useConnect();
+  const { switchChain } = useSwitchChain();
+  const mockConnector = useMemo(() => connectors.find((c) => c.id === 'mock'), [connectors]);
+  const primaryEvmConnector = connectors[0];
+
+  useEffect(() => {
+    if (evmConnector?.id !== 'mock' || evmChain?.id === hardhat.id) return;
+    switchChain({ chainId: hardhat.id });
+  }, [evmChain?.id, evmConnector?.id, switchChain]);
   const { cardanoUsedAddressesHex, cardanoWalletKey } = useCrossChainWallets();
   const {
     lastMidnightBurnAnchor,
+    ledger,
     initiateBurn,
-    canInitiateBurn,
     flowMessage: midnightFlowMessage,
     isConnected: midnightConnected,
   } = useZkStables();
@@ -85,15 +107,14 @@ export const BridgeForm: React.FC<{
   const [asset, setAsset] = useState<'USDC' | 'USDT'>('USDC');
   const [amount, setAmount] = useState('100');
   const [recipient, setRecipient] = useState('');
-  /** Must equal `burnCommitment` in the on-chain `ZkStablesWrappedToken.burn` call (or paste from a burn tx receipt). */
   const [burnCommitmentHex, setBurnCommitmentHex] = useState('');
   const [burnTxHashInput, setBurnTxHashInput] = useState('');
   const [burnSideNote, setBurnSideNote] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const usedCommitmentsRef = useRef<Set<string>>(new Set());
 
   const [cardanoLockTx, setCardanoLockTx] = useState('');
   const [cardanoLockIdx, setCardanoLockIdx] = useState('0');
@@ -106,7 +127,6 @@ export const BridgeForm: React.FC<{
   const [cardanoLockDiscoverErr, setCardanoLockDiscoverErr] = useState<string | null>(null);
   const [cardanoLocksRefreshKey, setCardanoLocksRefreshKey] = useState(0);
   const [midnightTxIdInput, setMidnightTxIdInput] = useState('');
-  const [midnightDestChainInput, setMidnightDestChainInput] = useState('');
   const [cardanoZkWalletAtomic, setCardanoZkWalletAtomic] = useState<bigint | null>(null);
   const [cardanoRedeemLockBusy, setCardanoRedeemLockBusy] = useState(false);
   const [cardanoRedeemLockNote, setCardanoRedeemLockNote] = useState<string | null>(null);
@@ -184,7 +204,6 @@ export const BridgeForm: React.FC<{
     setCardanoSpendTx('');
     setCardanoRedeemNote(null);
     setMidnightTxIdInput('');
-    setMidnightDestChainInput('');
   }, [operation, asset, sourceChain]);
 
   const cardanoZkUnitConfigured = useMemo(() => {
@@ -192,15 +211,35 @@ export const BridgeForm: React.FC<{
     return Boolean(String(u ?? '').trim());
   }, [asset]);
 
+  /** Lock discovery scans both zk native units; enable Refresh when either is set in env. */
+  const cardanoDiscoverUnitsConfigured = useMemo(
+    () =>
+      Boolean(String(import.meta.env.VITE_CARDANO_WUSDC_UNIT ?? '').trim()) ||
+      Boolean(String(import.meta.env.VITE_CARDANO_WUSDT_UNIT ?? '').trim()),
+    [],
+  );
+
+  const cardanoDemoMnemonicSigning = useMemo(
+    () => cardanoWalletKey === 'demo' && isDemoCardanoMnemonicConfigured(),
+    [cardanoWalletKey],
+  );
+
+  const cardanoCanSignBridgeOps = useMemo(
+    () => cardanoWalletKey === 'demo' && isDemoCardanoMnemonicConfigured(),
+    [cardanoWalletKey],
+  );
+
   useEffect(() => {
     let cancelled = false;
-    if (operation !== 'BURN' || sourceChain !== 'cardano' || !cardanoWalletKey || cardanoWalletKey === 'demo') {
+    const skipDiscover =
+      !cardanoWalletKey || (cardanoWalletKey === 'demo' && !isDemoCardanoMnemonicConfigured());
+    if (operation !== 'BURN' || sourceChain !== 'cardano' || skipDiscover) {
       setCardanoLockCandidates([]);
       setCardanoLockDiscoverErr(null);
       setCardanoLockDiscoverLoading(false);
       return;
     }
-    if (!cardanoZkUnitConfigured) {
+    if (!cardanoDiscoverUnitsConfigured) {
       setCardanoLockCandidates([]);
       setCardanoLockDiscoverErr(null);
       setCardanoLockDiscoverLoading(false);
@@ -214,6 +253,7 @@ export const BridgeForm: React.FC<{
 
     void discoverCardanoBridgeLocks({
       cip30WalletKey: cardanoWalletKey,
+      useDemoMnemonicWallet: cardanoDemoMnemonicSigning,
       relayerBaseUrl: relayerUrl,
       asset,
     })
@@ -223,17 +263,15 @@ export const BridgeForm: React.FC<{
         if (c.length > 0) {
           setCardanoLockTx(c[0].txHash);
           setCardanoLockIdx(String(c[0].outputIndex));
-        } else {
-          setCardanoLockTx('');
-          setCardanoLockIdx('0');
         }
+        /* Do not clear cardanoLockTx / cardanoLockIdx when the list is empty: Step 2 already set
+         * them, and Yaci/Mesh can return [] transiently or until indexer catches up. */
       })
       .catch((e) => {
         if (cancelled) return;
         setCardanoLockDiscoverErr(e instanceof Error ? e.message : String(e));
         setCardanoLockCandidates([]);
-        setCardanoLockTx('');
-        setCardanoLockIdx('0');
+        /* Keep manual / Step 2 lock fields so Sign BridgeRelease stays usable while discovery fails. */
       })
       .finally(() => {
         if (!cancelled) setCardanoLockDiscoverLoading(false);
@@ -242,16 +280,32 @@ export const BridgeForm: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [operation, sourceChain, cardanoWalletKey, asset, relayerUrl, cardanoZkUnitConfigured, cardanoLocksRefreshKey]);
+  }, [
+    operation,
+    sourceChain,
+    cardanoWalletKey,
+    cardanoDemoMnemonicSigning,
+    asset,
+    relayerUrl,
+    cardanoDiscoverUnitsConfigured,
+    cardanoLocksRefreshKey,
+  ]);
 
   const cardanoNativeDecimals = Math.min(
     18,
     Math.max(0, Number.parseInt(String(import.meta.env.VITE_CARDANO_NATIVE_DECIMALS ?? '6'), 10) || 6),
   );
 
+  const cardanoZkBalanceLabelContext = useMemo(() => {
+    if (operation !== 'BURN' || sourceChain !== 'cardano') return 'wallet' as const;
+    if (cardanoWalletKey && cardanoWalletKey !== 'demo') return 'wallet' as const;
+    if (cardanoWalletKey === 'demo' && isDemoCardanoMnemonicConfigured()) return 'wallet' as const;
+    return 'on-chain' as const;
+  }, [operation, sourceChain, cardanoWalletKey]);
+
   useEffect(() => {
     let cancelled = false;
-    if (operation !== 'BURN' || sourceChain !== 'cardano' || !cardanoWalletKey || cardanoWalletKey === 'demo' || !cardanoZkUnitConfigured) {
+    if (operation !== 'BURN' || sourceChain !== 'cardano' || !cardanoZkUnitConfigured) {
       setCardanoZkWalletAtomic(null);
       return;
     }
@@ -263,13 +317,49 @@ export const BridgeForm: React.FC<{
       setCardanoZkWalletAtomic(null);
       return;
     }
-    void sumWalletNativeUnitBalance({ cip30WalletKey: cardanoWalletKey, unit }).then((b) => {
-      if (!cancelled) setCardanoZkWalletAtomic(b);
-    });
+
+    const useMeshBalance = Boolean(
+      cardanoWalletKey && (cardanoWalletKey !== 'demo' || isDemoCardanoMnemonicConfigured()),
+    );
+    if (useMeshBalance) {
+      void sumWalletNativeUnitBalance({
+        cip30WalletKey: cardanoWalletKey!,
+        useDemoMnemonicWallet: cardanoWalletKey === 'demo',
+        unit,
+      }).then((b) => {
+        if (!cancelled) setCardanoZkWalletAtomic(b);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const yaciBase = resolveYaciStoreBaseUrl();
+    const bech32 = adaSrc.trim();
+    if (!yaciBase || !bech32) {
+      setCardanoZkWalletAtomic(null);
+      return;
+    }
+
+    void fetchYaciAddressNativeAssetQuantity({ yaciStoreBaseUrl: yaciBase, bech32, assetUnit: unit })
+      .then((b) => {
+        if (!cancelled) setCardanoZkWalletAtomic(b);
+      })
+      .catch(() => {
+        if (!cancelled) setCardanoZkWalletAtomic(null);
+      });
     return () => {
       cancelled = true;
     };
-  }, [operation, sourceChain, cardanoWalletKey, asset, cardanoZkUnitConfigured, cardanoLocksRefreshKey]);
+  }, [
+    operation,
+    sourceChain,
+    cardanoWalletKey,
+    asset,
+    cardanoZkUnitConfigured,
+    cardanoLocksRefreshKey,
+    adaSrc,
+  ]);
 
   const cardanoZkMaxHuman = useMemo(() => {
     if (cardanoZkWalletAtomic === null || cardanoZkWalletAtomic <= 0n) return null;
@@ -280,8 +370,13 @@ export const BridgeForm: React.FC<{
     }
   }, [cardanoZkWalletAtomic, cardanoNativeDecimals]);
 
+  const poolLockAddress = useMemo(
+    () => parseEnvEthereumAddress(import.meta.env.VITE_EVM_POOL_LOCK),
+    [],
+  );
+
   const publicClient = usePublicClient();
-  const { writeContractAsync, isPending: burnWalletPending } = useWriteContract();
+  const { writeContractAsync, isPending: walletPending } = useWriteContract();
 
   const wrappedTokenAddress = useMemo((): Address | undefined => {
     const raw =
@@ -293,62 +388,68 @@ export const BridgeForm: React.FC<{
 
   /** `isConnected` stays false briefly during `connecting` even when `address` is already set — still allow burn. */
   const evmCanBurnZk = Boolean(evmAddress) && (evmConnected || evmStatus === 'connecting' || evmStatus === 'reconnecting');
+  /**
+   * Same holder as the EVM source pill: wagmi address when connected, else relayer demo account (0xf39…).
+   * `useConnection().address` is undefined with mock/disconnected UI — balanceOf must still target the shown address.
+   */
+  const evmUnderlyingBalanceAddress = useMemo((): Address | undefined => {
+    const raw = evmConnected && evmAddress ? evmAddress : evm0;
+    return raw && isAddress(raw) ? (raw as Address) : undefined;
+  }, [evmConnected, evmAddress, evm0]);
 
   const burnZkDisabledReason = useMemo(() => {
-    if (burnWalletPending) return null;
+    if (walletPending) return null;
     if (!wrappedTokenAddress) {
-      return 'Set VITE_DEMO_WUSDC_ADDRESS / VITE_DEMO_WUSDT_ADDRESS in .env (from deploy JSON), then restart Vite.';
+      return import.meta.env.DEV
+        ? 'Set VITE_DEMO_WUSDC_ADDRESS / VITE_DEMO_WUSDT_ADDRESS in .env, then restart Vite.'
+        : 'Token address not configured.';
     }
     if (!evmCanBurnZk) {
-      return 'Connect an EVM wallet (Connect wallet or Use Anvil demo account) on Hardhat (31337) for local zk tokens.';
+      return 'Connect an EVM wallet to burn zk tokens.';
     }
     return null;
-  }, [burnWalletPending, evmCanBurnZk, wrappedTokenAddress]);
+  }, [walletPending, evmCanBurnZk, wrappedTokenAddress]);
 
   const underlyingUsdcAddr = useMemo(() => parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDC_ADDRESS), []);
   const underlyingUsdtAddr = useMemo(() => parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDT_ADDRESS), []);
+  const underlyingPayoutAddr = useMemo(
+    () => (asset === 'USDC' ? underlyingUsdcAddr : underlyingUsdtAddr),
+    [asset, underlyingUsdcAddr, underlyingUsdtAddr],
+  );
   const underlyingEnvConfigured = Boolean(underlyingUsdcAddr && underlyingUsdtAddr);
-  const underlyingReadsEnabled = underlyingEnvConfigured && Boolean(evmAddress && evmCanBurnZk);
+  const underlyingReadsEnabled =
+    underlyingEnvConfigured && sourceChain === 'evm' && Boolean(evmUnderlyingBalanceAddress);
 
   const { data: liveUsdcBalRaw } = useReadContract({
     address: underlyingUsdcAddr,
     abi: erc20BalanceOfAbi,
     functionName: 'balanceOf',
-    args: underlyingReadsEnabled && evmAddress ? [evmAddress] : undefined,
+    args: underlyingReadsEnabled && evmUnderlyingBalanceAddress ? [evmUnderlyingBalanceAddress] : undefined,
     query: { enabled: underlyingReadsEnabled },
   });
   const { data: liveUsdtBalRaw } = useReadContract({
     address: underlyingUsdtAddr,
     abi: erc20BalanceOfAbi,
     functionName: 'balanceOf',
-    args: underlyingReadsEnabled && evmAddress ? [evmAddress] : undefined,
+    args: underlyingReadsEnabled && evmUnderlyingBalanceAddress ? [evmUnderlyingBalanceAddress] : undefined,
     query: { enabled: underlyingReadsEnabled },
   });
 
   const zkSymbol = asset === 'USDC' ? 'zkUSDC' : 'zkUSDT';
 
-  const recipientHelper = useMemo(() => {
-    if (operation === 'BURN' && (sourceChain === 'cardano' || sourceChain === 'midnight')) {
-      return `Redeem pays underlying ${asset} on EVM only — use a 0x… address (e.g. your connected wallet). You burn ${zkSymbol} on Cardano or Midnight; the relayer releases pool ${asset} on Ethereum / your configured EVM.`;
-    }
-    if (operation === 'BURN') {
-      return `Where ${asset} (underlying stable) should be sent on EVM after you burn ${zkSymbol} on-chain — use an EVM 0x… address.`;
-    }
-    if (sourceChain === 'midnight') {
-      if (destChain === 'evm') return 'EVM address (0x…) that should receive minted wrapped stables.';
-      if (destChain === 'cardano') return 'Cardano bech32 (addr1… / addr_test1…) for native payout.';
-    }
-    if (destChain === 'midnight') return 'Midnight shielded (mn_…1…) or unshielded (mn_addr_…) destination.';
-    if (destChain === 'cardano') return 'Cardano bech32 where the relayer sends the bridge payout.';
-    if (destChain === 'evm') return 'EVM address (0x…) for ZkStablesBridgeMint.';
-    return 'Mint locks mUSDC/mUSDT on EVM; recipient is where zkUSDC/zkUSDT (or native zk) is credited on the destination chain.';
-  }, [operation, sourceChain, destChain, asset, zkSymbol]);
+  
 
   const redeemBurnLinked = useMemo(() => {
     if (operation !== 'BURN' || sourceChain !== 'evm') return false;
     const bc = burnCommitmentHex.replace(/^0x/i, '').trim();
     return burnTxHashInput.length > 0 && bc.length === 64 && /^[0-9a-fA-F]+$/u.test(bc);
   }, [operation, sourceChain, burnTxHashInput, burnCommitmentHex]);
+
+  const burnCommitmentBare = useMemo(() => burnCommitmentHex.replace(/^0x/i, '').trim(), [burnCommitmentHex]);
+  const burnCommitmentFieldValid = useMemo(
+    () => burnCommitmentBare.length === 64 && /^[0-9a-fA-F]+$/u.test(burnCommitmentBare),
+    [burnCommitmentBare],
+  );
 
   const burnTxShort = useMemo(() => {
     const h = burnTxHashInput;
@@ -374,13 +475,24 @@ export const BridgeForm: React.FC<{
     if (operation !== 'BURN' || sourceChain !== 'midnight' || !lastMidnightBurnAnchor) return;
     setBurnCommitmentHex(lastMidnightBurnAnchor.recipientCommHex64);
     setMidnightTxIdInput(lastMidnightBurnAnchor.txId);
-    setMidnightDestChainInput(lastMidnightBurnAnchor.destChain);
   }, [operation, sourceChain, lastMidnightBurnAnchor]);
 
   const cardanoUserBridgeRelease = useCallback(async () => {
     setCardanoRedeemNote(null);
-    if (!cardanoWalletKey || cardanoWalletKey === 'demo') {
-      setCardanoRedeemNote('Connect a real CIP-30 wallet (not demo) for BridgeRelease.');
+    if (!cardanoWalletKey) {
+      setCardanoRedeemNote(
+        import.meta.env.DEV
+          ? 'Enable Cardano in-app signing: set VITE_DEMO_CARDANO_WALLET_MNEMONIC (same as relayer) and rebuild.'
+          : 'Cardano wallet not configured.',
+      );
+      return;
+    }
+    if (cardanoWalletKey === 'demo' && !isDemoCardanoMnemonicConfigured()) {
+      setCardanoRedeemNote(
+        import.meta.env.DEV
+          ? 'Cardano wallet not configured — set VITE_DEMO_CARDANO_WALLET_MNEMONIC (same as relayer) and rebuild.'
+          : 'Cardano wallet not configured.',
+      );
       return;
     }
     const txH = cardanoLockTx.replace(/^0x/i, '').trim();
@@ -395,6 +507,7 @@ export const BridgeForm: React.FC<{
     try {
       const r = await userWalletBridgeReleaseLockUtxo({
         cip30WalletKey: cardanoWalletKey,
+        useDemoMnemonicWallet: cardanoWalletKey === 'demo',
         relayerBaseUrl: relayerUrl,
         lockTxHash: txH,
         lockOutputIndex: oi,
@@ -417,9 +530,15 @@ export const BridgeForm: React.FC<{
   }, [cardanoLockIdx, cardanoLockTx, cardanoWalletKey, relayerUrl]);
 
   const generateRedeemCommitment = useCallback(() => {
-    setBurnCommitmentHex(randomBytes32Hex());
     setCardanoRedeemLockNote(null);
     setMidnightBurnNote(null);
+    try {
+      setBurnCommitmentHex(randomBytes32Hex());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setCardanoRedeemLockNote(`Could not generate commitment: ${msg}`);
+      setMidnightBurnNote(`Could not generate commitment: ${msg}`);
+    }
   }, []);
 
   const cardanoLockZkForRedeem = useCallback(async () => {
@@ -429,8 +548,20 @@ export const BridgeForm: React.FC<{
       setCardanoRedeemLockNote('Generate a redeem commitment first (Step 1).');
       return;
     }
-    if (!cardanoWalletKey || cardanoWalletKey === 'demo') {
-      setCardanoRedeemLockNote('Connect a real CIP-30 wallet.');
+    if (!cardanoWalletKey) {
+      setCardanoRedeemLockNote(
+        import.meta.env.DEV
+          ? 'Restore the in-app Cardano wallet (mnemonic must be set in the build via VITE_DEMO_CARDANO_WALLET_MNEMONIC).'
+          : 'Cardano wallet not configured.',
+      );
+      return;
+    }
+    if (cardanoWalletKey === 'demo' && !isDemoCardanoMnemonicConfigured()) {
+      setCardanoRedeemLockNote(
+        import.meta.env.DEV
+          ? 'Set VITE_DEMO_CARDANO_WALLET_MNEMONIC (same phrase as RELAYER_CARDANO_WALLET_MNEMONIC) and rebuild.'
+          : 'Cardano wallet not configured.',
+      );
       return;
     }
     if (!cardanoZkUnitConfigured) {
@@ -441,6 +572,7 @@ export const BridgeForm: React.FC<{
     try {
       const r = await browserLockZkAtBridgeScript({
         cip30WalletKey: cardanoWalletKey,
+        useDemoMnemonicWallet: cardanoWalletKey === 'demo',
         relayerBaseUrl: relayerUrl,
         asset,
         amountHuman: amount,
@@ -469,16 +601,15 @@ export const BridgeForm: React.FC<{
       setMidnightBurnNote('Generate a redeem commitment first (64 hex chars).');
       return;
     }
-    if (!midnightConnected || !canInitiateBurn) {
-      setMidnightBurnNote(
-        'Connect Midnight, deploy or join the zk-stables contract, and ensure the ledger allows initiateBurn (Circuits / Developer tools).',
-      );
+    if (!midnightConnected) {
+      setMidnightBurnNote('Connect Midnight wallet first.');
       return;
     }
-    const dest = (midnightDestChainInput.trim() || lastMidnightBurnAnchor?.destChain || '2').trim();
+    const depBytes = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) depBytes[i] = parseInt(bc.slice(i * 2, i * 2 + 2), 16);
     setMidnightBurnBusy(true);
     try {
-      await initiateBurn({ recipientCommHex64: bc, destChain: dest });
+      await initiateBurn({ depositCommitment: depBytes, recipientCommHex64: bc, destChain: '2' });
       setMidnightBurnNote('initiateBurn submitted. Fields below update from the indexer — then Review → Confirm.');
     } catch (e) {
       setMidnightBurnNote(e instanceof Error ? e.message : String(e));
@@ -487,12 +618,111 @@ export const BridgeForm: React.FC<{
     }
   }, [
     burnCommitmentHex,
-    canInitiateBurn,
     initiateBurn,
-    lastMidnightBurnAnchor?.destChain,
     midnightConnected,
-    midnightDestChainInput,
   ]);
+
+  const [lockBusy, setLockBusy] = useState(false);
+  const [lockNote, setLockNote] = useState<string | null>(null);
+  /** Set after a successful `pool.lock` so HTTP LOCK carries `source.evm` (relayer proves real deposit). */
+  const [evmLockAnchor, setEvmLockAnchor] = useState<{
+    txHash: Hex;
+    logIndex: number;
+    blockNumber: string;
+    poolLockAddress: Address;
+    token: Address;
+    nonce: Hex;
+    amountRaw: bigint;
+  } | null>(null);
+
+  useEffect(() => {
+    setEvmLockAnchor(null);
+  }, [amount, recipient, asset, destChain, operation, sourceChain]);
+
+  const underlyingTokenAddr = useMemo((): Address | undefined => {
+    const raw = asset === 'USDT' ? import.meta.env.VITE_DEMO_USDT_ADDRESS : import.meta.env.VITE_DEMO_USDC_ADDRESS;
+    return parseEnvEthereumAddress(raw);
+  }, [asset]);
+
+  const evmLockOnChain = useCallback(async () => {
+    setLockNote(null);
+    if (!poolLockAddress) {
+      setLockNote('Set VITE_EVM_POOL_LOCK in .env and rebuild.');
+      return;
+    }
+    if (!underlyingTokenAddr) {
+      setLockNote('Set VITE_DEMO_USDC_ADDRESS / VITE_DEMO_USDT_ADDRESS in .env and rebuild.');
+      return;
+    }
+    if (!evmAddress || !publicClient) {
+      setLockNote('Connect an EVM wallet first.');
+      return;
+    }
+    const r = recipient.trim();
+    if (!r) {
+      setLockNote('Set a recipient address.');
+      return;
+    }
+    let raw: bigint;
+    try {
+      raw = parseUnits(amount.trim() || '0', 6);
+    } catch {
+      setLockNote('Amount must be a decimal number (6 decimals).');
+      return;
+    }
+    if (raw <= 0n) {
+      setLockNote('Amount must be greater than zero.');
+      return;
+    }
+    const nonce = `0x${randomBytes32Hex()}` as Hex;
+    setLockBusy(true);
+    try {
+      const approveHash = await writeContractAsync({
+        address: underlyingTokenAddr,
+        abi: erc20ApproveAbi,
+        functionName: 'approve',
+        args: [poolLockAddress, raw],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+
+      const lockHash = await writeContractAsync({
+        address: poolLockAddress,
+        abi: poolLockAbi,
+        functionName: 'lock',
+        args: [underlyingTokenAddr, raw, r as Address, nonce],
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: lockHash });
+      if (!poolLockAddress) {
+        setLockNote('Internal error: pool address missing after lock.');
+        return;
+      }
+      const parsed = parseLockedFromReceipt(receipt, poolLockAddress);
+      if (!parsed) {
+        setLockNote(
+          `Tx ${lockHash.slice(0, 14)}… confirmed but no Locked event found for this pool — check VITE_EVM_POOL_LOCK.`,
+        );
+        setEvmLockAnchor(null);
+        return;
+      }
+      setEvmLockAnchor({
+        txHash: parsed.txHash,
+        logIndex: parsed.logIndex,
+        blockNumber: parsed.blockNumber.toString(),
+        poolLockAddress,
+        token: parsed.token,
+        nonce: parsed.nonce,
+        amountRaw: parsed.amount,
+      });
+      setLockNote(
+        `Locked on-chain — tx ${lockHash.slice(0, 14)}… (block ${receipt.blockNumber}). ` +
+          `Review → Confirm sends this lock to the relayer (mint will not run without this on-chain anchor).`,
+      );
+    } catch (e) {
+      setLockNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLockBusy(false);
+    }
+  }, [amount, evmAddress, publicClient, recipient, writeContractAsync, poolLockAddress, underlyingTokenAddr]);
 
   const burnZkOnChain = useCallback(async () => {
     setBurnSideNote(null);
@@ -584,12 +814,6 @@ export const BridgeForm: React.FC<{
   /** Cross-chain redeem: underlying lands on EVM even though the burn is on Cardano/Midnight. */
   const redeemPayoutVisual: ChainVisual =
     operation === 'BURN' && (sourceChain === 'cardano' || sourceChain === 'midnight') ? 'evm' : sourceVisual;
-  const redeemPayoutAddress = useMemo(() => {
-    if (operation === 'BURN' && (sourceChain === 'cardano' || sourceChain === 'midnight')) {
-      return recipient.trim() || evmAddress || evm0 || '';
-    }
-    return sourcePillAddress;
-  }, [operation, sourceChain, recipient, evmAddress, evm0, sourcePillAddress]);
 
   const destPillAddress = useMemo(() => {
     if (operation === 'BURN') return sourcePillAddress;
@@ -599,23 +823,32 @@ export const BridgeForm: React.FC<{
   }, [operation, destChain, sourcePillAddress, evm1, evm0, adaDst, demo.midnight.shieldedExample]);
 
   const underlyingMaxBalance = useMemo(() => {
-    if (underlyingEnvConfigured) {
-      if (!evmAddress || !evmCanBurnZk) return '0';
-      const raw = asset === 'USDC' ? liveUsdcBalRaw : liveUsdtBalRaw;
-      if (raw === undefined) return '0';
-      return formatUnits(raw, 6);
+    if (!underlyingEnvConfigured) {
+      return asset === 'USDC' ? demo.demoBalances.usdc : demo.demoBalances.usdt;
     }
-    return asset === 'USDC' ? demo.demoBalances.usdc : demo.demoBalances.usdt;
+    if (sourceChain !== 'evm') {
+      return asset === 'USDC' ? demo.demoBalances.usdc : demo.demoBalances.usdt;
+    }
+    if (!evmUnderlyingBalanceAddress) return '0';
+    const raw = asset === 'USDC' ? liveUsdcBalRaw : liveUsdtBalRaw;
+    if (raw === undefined) return '0';
+    return formatUnits(raw, 6);
   }, [
     asset,
     demo.demoBalances.usdc,
     demo.demoBalances.usdt,
-    evmAddress,
-    evmCanBurnZk,
+    evmUnderlyingBalanceAddress,
     liveUsdcBalRaw,
     liveUsdtBalRaw,
+    sourceChain,
     underlyingEnvConfigured,
   ]);
+
+  /** Lock is only offered when the displayed underlying balance is greater than zero (avoids signing a doomed tx). */
+  const hasPositiveUnderlyingForLock = useMemo(() => {
+    const n = Number.parseFloat(String(underlyingMaxBalance).replace(/,/g, ''));
+    return Number.isFinite(n) && n > 0;
+  }, [underlyingMaxBalance]);
 
   const zkMaxFromWallet =
     operation === 'BURN' && sourceChain === 'evm' && zkBalanceRaw !== undefined
@@ -630,6 +863,29 @@ export const BridgeForm: React.FC<{
     const txH = cardanoLockTx.replace(/^0x/i, '').trim().toLowerCase();
     return txH.length === 64 && /^[0-9a-f]+$/u.test(txH);
   }, [cardanoLockTx]);
+
+  /** When signing is still impossible (no mnemonic in build or demo disconnected). */
+  const cardanoSignBlockedWhy = useMemo((): string | null => {
+    if (operation !== 'BURN' || sourceChain !== 'cardano') return null;
+    if (!cardanoWalletKey) {
+      return import.meta.env.DEV
+        ? 'Set VITE_DEMO_CARDANO_WALLET_MNEMONIC (same phrase as the relayer bridge wallet) and rebuild — signing is mnemonic-only (no browser wallet).'
+        : 'Cardano wallet not configured.';
+    }
+    if (cardanoWalletKey === 'demo' && !isDemoCardanoMnemonicConfigured()) {
+      return import.meta.env.DEV
+        ? 'Cardano wallet not configured: add VITE_DEMO_CARDANO_WALLET_MNEMONIC (copy from relayer .env) and rebuild.'
+        : 'Cardano wallet not configured.';
+    }
+    return null;
+  }, [operation, sourceChain, cardanoWalletKey]);
+
+  const signLockAtBridgeTitle = useMemo(() => {
+    if (cardanoRedeemLockBusy) return 'Signing transaction…';
+    if (!cardanoZkUnitConfigured) return 'Set VITE_CARDANO_WUSDC_UNIT / WUSDT_UNIT and rebuild.';
+    if (cardanoSignBlockedWhy) return cardanoSignBlockedWhy;
+    return `Lock ${zkSymbol} at the bridge script with the commitment above`;
+  }, [cardanoRedeemLockBusy, cardanoZkUnitConfigured, cardanoSignBlockedWhy, zkSymbol]);
 
   const fiatApprox = useMemo(() => {
     const n = Number.parseFloat(amount.replace(/,/g, ''));
@@ -682,11 +938,21 @@ export const BridgeForm: React.FC<{
     const destLabel = operation === 'LOCK' ? destinationApiLabel(destChain) : undefined;
     const bcRaw = burnCommitmentHex.replace(/^0x/i, '').trim();
     if (operation === 'BURN') {
-      if (bcRaw.length !== 64 || !/^[0-9a-fA-F]+$/u.test(bcRaw)) {
+      const crossChainRedeem = sourceChain === 'cardano' || sourceChain === 'midnight';
+      const bcOk = bcRaw.length === 64 && /^[0-9a-fA-F]+$/u.test(bcRaw);
+      if (bcOk && usedCommitmentsRef.current.has(bcRaw.toLowerCase())) {
+        setError('This commitment was already submitted. Generate a new one to avoid a duplicate burn nonce on-chain.');
+        return null;
+      }
+      if (!crossChainRedeem && !bcOk) {
+        return null;
+      }
+      if (crossChainRedeem && bcRaw.length > 0 && !bcOk) {
         return null;
       }
     }
-    const bc = bcRaw.toLowerCase();
+    const bc =
+      bcRaw.length === 64 && /^[0-9a-fA-F]+$/u.test(bcRaw) ? bcRaw.toLowerCase() : '';
     const connected = {
       evm: evmConnected ? evmAddress : undefined,
       cardano: cardanoWalletKey ? cardanoUsedAddressesHex[0] : undefined,
@@ -723,7 +989,7 @@ export const BridgeForm: React.FC<{
         const txId = midnightTxIdInput.trim() || lastMidnightBurnAnchor?.txId;
         if (!txId) return null;
         const dc = Number.parseInt(
-          (midnightDestChainInput.trim() || lastMidnightBurnAnchor?.destChain || '0').trim(),
+          (lastMidnightBurnAnchor?.destChain || '2').trim(),
           10,
         );
         burn.source = {
@@ -736,6 +1002,38 @@ export const BridgeForm: React.FC<{
         };
       }
       return burn;
+    }
+    if (sourceChain === 'evm') {
+      if (!evmLockAnchor || !underlyingTokenAddr) return null;
+      if (underlyingTokenAddr.toLowerCase() !== evmLockAnchor.token.toLowerCase()) return null;
+      let wantRaw: bigint;
+      try {
+        wantRaw = parseUnits(amount.trim() || '0', 6);
+      } catch {
+        return null;
+      }
+      if (wantRaw !== evmLockAnchor.amountRaw) return null;
+      return {
+        operation: 'LOCK',
+        sourceChain,
+        destinationChain: destLabel,
+        asset,
+        assetKind: assetKindForLabel(asset),
+        amount,
+        recipient: r,
+        connected,
+        note: 'LOCK intent via bridge UI (zk-stables-relayer); anchored to on-chain pool.lock.',
+        source: {
+          evm: {
+            txHash: evmLockAnchor.txHash,
+            logIndex: evmLockAnchor.logIndex,
+            blockNumber: evmLockAnchor.blockNumber,
+            poolLockAddress: evmLockAnchor.poolLockAddress,
+            token: evmLockAnchor.token,
+            nonce: evmLockAnchor.nonce,
+          },
+        },
+      };
     }
     return {
       operation: 'LOCK',
@@ -761,15 +1059,22 @@ export const BridgeForm: React.FC<{
     cardanoLockNonce,
     cardanoSpendTx,
     midnightTxIdInput,
-    midnightDestChainInput,
     lastMidnightBurnAnchor,
     evmConnected,
     evmAddress,
     cardanoWalletKey,
     cardanoUsedAddressesHex,
+    evmLockAnchor,
+    underlyingTokenAddr,
   ]);
 
   const submit = useCallback(async () => {
+    if (operation === 'LOCK' && sourceChain === 'evm' && !evmLockAnchor) {
+      setError(
+        'Mint requires locking USDC/USDT on-chain first (use “Lock … on-chain” with a connected wallet), then Review → Confirm without changing amount or asset.',
+      );
+      return;
+    }
     const payload = buildPayload();
     if (!payload) {
       const r = recipient.trim();
@@ -786,14 +1091,18 @@ export const BridgeForm: React.FC<{
         setError(`Burn ${zkSymbol} from your wallet first (button above), then Review → Confirm to notify the relayer.`);
       } else if (operation === 'BURN' && sourceChain === 'cardano') {
         setError(
-          'Cardano redeem: run BridgeRelease (section below), then ensure lock tx id, output index, spend tx id, and commitment are set.',
+          'Complete Cardano BridgeRelease flow first, then Review → Confirm.',
         );
       } else if (operation === 'BURN' && sourceChain === 'midnight') {
         setError(
-          'Midnight redeem: run initiateBurn in Developer tools; tx id, dest chain, and commitment sync from session state automatically.',
+          'Run initiateBurn on Midnight first, then Review → Confirm.',
         );
       } else if (operation === 'BURN') {
-        setError('Complete redeem prerequisites for this source chain, then Review → Confirm.');
+        setError('Complete redeem prerequisites first, then Review → Confirm.');
+      } else if (operation === 'LOCK' && sourceChain === 'evm') {
+        setError(
+          'Amount and asset must match your last on-chain lock, and the locked token must be the selected USDC/USDT.',
+        );
       } else {
         setError('Add a recipient before submitting.');
       }
@@ -809,6 +1118,13 @@ export const BridgeForm: React.FC<{
           ? await submitLockIntent(relayerUrl, payload)
           : await submitBurnIntent(relayerUrl, payload);
       onJobUpdate(job);
+      if (payload.operation === 'LOCK') {
+        setEvmLockAnchor(null);
+      }
+      if (payload.operation === 'BURN' && 'burnCommitmentHex' in payload && payload.burnCommitmentHex) {
+        usedCommitmentsRef.current.add(payload.burnCommitmentHex.toLowerCase());
+        setBurnCommitmentHex('');
+      }
       pollRef.current = setInterval(async () => {
         try {
           const j = await getRelayerJob(relayerUrl, job.id);
@@ -826,7 +1142,7 @@ export const BridgeForm: React.FC<{
       setSubmitting(false);
       setReviewOpen(false);
     }
-  }, [buildPayload, operation, relayerUrl, onJobUpdate, stopPoll, zkSymbol, sourceChain, recipient]);
+  }, [buildPayload, operation, relayerUrl, onJobUpdate, stopPoll, zkSymbol, sourceChain, recipient, evmLockAnchor]);
 
   return (
     <div>
@@ -850,40 +1166,10 @@ export const BridgeForm: React.FC<{
               bridgeTab === 1 ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800',
             )}
           >
-            <span title="Burn zkUSDC / zkUSDT → unlock USDC / USDT on the source chain">Redeem</span>
+            <span title="Burn zkUSDC / zkUSDT → unlock USDC / USDT on EVM">Redeem</span>
           </button>
         </div>
-        <button
-          type="button"
-          title="Demo & relayer info"
-          aria-label="Demo and relayer info"
-          onClick={() => setSettingsOpen((o) => !o)}
-          className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-        >
-          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-            <circle cx="12" cy="12" r="3" />
-            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-          </svg>
-        </button>
       </div>
-
-      {settingsOpen ? (
-        <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-relaxed text-slate-700">
-          <div className="flex justify-between gap-2">
-            <span className="font-medium text-slate-900">Demo</span>
-            <button type="button" className="text-slate-400 hover:text-slate-600" onClick={() => setSettingsOpen(false)} aria-label="Close">
-              ×
-            </button>
-          </div>
-          <p className="mt-1">{demo.warning}</p>
-          <p className="mt-2 font-mono text-[11px] text-slate-600">
-            Relayer: {relayerUrl}
-          </p>
-          {demo.evm.mnemonic ? (
-            <p className="mt-2 break-words font-mono text-[11px] text-slate-600">EVM mnemonic: {demo.evm.mnemonic}</p>
-          ) : null}
-        </div>
-      ) : null}
 
       {error ? (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -899,15 +1185,6 @@ export const BridgeForm: React.FC<{
         chain={sourceVisual}
         address={sourcePillAddress}
       />
-
-      {operation === 'BURN' ? (
-        <p className="mb-2 text-[11px] leading-snug text-slate-600">
-          Burn <span className="font-semibold text-slate-800">{zkSymbol}</span> on the source chain you selected. After the relayer accepts the burn anchor,{' '}
-          <span className="font-semibold text-slate-800">{asset}</span> (underlying stablecoin) is released on{' '}
-          <span className="font-semibold text-slate-800">EVM</span> to the recipient below
-          {sourceChain === 'cardano' || sourceChain === 'midnight' ? ' — use a 0x… EVM address' : ''}.
-        </p>
-      ) : null}
 
       <div className="mb-1 flex flex-wrap items-start gap-2">
         <div className="w-[7.5rem] shrink-0">
@@ -943,10 +1220,10 @@ export const BridgeForm: React.FC<{
                 operation === 'BURN' && sourceChain === 'evm' && zkMaxFromWallet
                   ? `Use full ${zkSymbol} balance`
                   : operation === 'BURN' && sourceChain === 'cardano' && cardanoZkMaxHuman
-                    ? `Use full ${zkSymbol} balance in your Cardano wallet`
+                    ? `Use full ${zkSymbol} balance (${cardanoZkBalanceLabelContext})`
                     : underlyingEnvConfigured
-                      ? `Use full m${asset} on EVM (demo)`
-                      : 'Use max from relayer demo placeholder'
+                      ? `Use full ${asset} balance on EVM`
+                      : 'Use max from relayer'
               }
             >
               Max
@@ -954,7 +1231,9 @@ export const BridgeForm: React.FC<{
           </div>
         </div>
         <div className="w-full min-[380px]:w-[9.5rem] min-[380px]:shrink-0">
-          <label className="mb-1 block text-xs font-medium text-slate-500 opacity-0 min-[380px]:opacity-100">You burn</label>
+          <label className="mb-1 block text-xs font-medium text-slate-500 opacity-0 min-[380px]:opacity-100">
+            {operation === 'BURN' ? 'You burn' : 'Balance'}
+          </label>
           <WalletPill
             chain={sourceVisual}
             symbol={operation === 'BURN' ? zkSymbol : asset}
@@ -964,9 +1243,9 @@ export const BridgeForm: React.FC<{
                 ? `${zkMaxFromWallet} ${zkSymbol}`
                 : operation === 'BURN' && sourceChain === 'cardano'
                   ? cardanoZkMaxHuman
-                    ? `${cardanoZkMaxHuman} ${zkSymbol} (wallet)`
+                    ? `${cardanoZkMaxHuman} ${zkSymbol} (${cardanoZkBalanceLabelContext})`
                     : cardanoZkUnitConfigured
-                      ? `0 ${zkSymbol} (wallet)`
+                      ? `0 ${zkSymbol} (${cardanoZkBalanceLabelContext})`
                       : `set VITE_CARDANO_W${asset === 'USDC' ? 'USDC' : 'USDT'}_UNIT`
                 : operation === 'BURN' && sourceChain === 'midnight'
                   ? `${zkSymbol} (Midnight ledger)`
@@ -1006,24 +1285,22 @@ export const BridgeForm: React.FC<{
       {operation === 'BURN' && (
         <div className="mb-4 flex flex-wrap items-start gap-2 rounded-xl border border-emerald-100/90 bg-emerald-50/40 px-3 py-2.5">
           <div className="min-w-0 flex-1">
-            <label className="mb-1 block text-xs font-medium text-slate-600">You receive (underlying stable)</label>
+            <label className="mb-1 block text-xs font-medium text-slate-600">You receive ({asset} on EVM)</label>
             <input
               className={inputCls + ' cursor-not-allowed bg-white text-lg font-semibold text-emerald-950'}
               value={amount}
               readOnly
               aria-readonly
             />
-            <p className="mt-1 text-[10px] leading-snug text-slate-500">
-              Same face value in <span className="font-semibold">{asset}</span> after the relayer unlocks pool funds to your recipient.
-            </p>
+            
           </div>
           <div className="w-full min-[380px]:w-[9.5rem] min-[380px]:shrink-0">
             <label className="mb-1 block text-xs font-medium text-slate-500 opacity-0 min-[380px]:opacity-100">Payout token</label>
             <WalletPill
               chain={redeemPayoutVisual}
               symbol={asset}
-              address={redeemPayoutAddress || '—'}
-              balanceLabel="Relayer / pool"
+              address={underlyingPayoutAddr ?? '—'}
+              balanceLabel="ERC-20"
             />
           </div>
         </div>
@@ -1070,11 +1347,11 @@ export const BridgeForm: React.FC<{
         <p className="mt-5 flex-1 text-xs text-slate-500">
           {operation === 'BURN' ? (
             <>
-              Burn 1 {zkSymbol} → unlock 1 {asset} <span className="text-slate-400">(demo)</span>
+              Burn 1 {zkSymbol} → unlock 1 {asset}
             </>
           ) : (
             <>
-              1 {asset} ≈ 1 {asset} <span className="text-slate-400">(demo)</span>
+              1 {asset} ≈ 1 {asset} <span className="text-slate-400">(1:1)</span>
             </>
           )}
         </p>
@@ -1097,7 +1374,7 @@ export const BridgeForm: React.FC<{
         spellCheck={false}
         autoComplete="off"
       />
-      <p className="mb-4 text-xs leading-relaxed text-slate-500">{recipientHelper}</p>
+      
 
       <div className="mb-5 flex flex-wrap gap-2">
         <button type="button" className={ghostBtn} onClick={() => applyRecipientDefaults()}>
@@ -1125,34 +1402,77 @@ export const BridgeForm: React.FC<{
         )}
       </div>
 
-      {operation === 'BURN' && sourceChain === 'evm' ? (
-        <div className="mb-5 space-y-3 rounded-2xl border border-dashed border-amber-400/55 bg-gradient-to-b from-amber-50/95 via-white to-white px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]">
-          <details className="rounded-xl border border-amber-200/80 bg-white px-3 py-2.5 text-left">
-            <summary className="cursor-pointer select-none text-[13px] font-semibold tracking-tight text-amber-950 [list-style-position:outside] marker:text-amber-600">
-              How EVM redeem works
-            </summary>
-            <div className="mt-3 space-y-3 border-t border-amber-100 pt-3 text-[12px] leading-relaxed text-slate-700">
-              <p>
-                On EVM, redeem = call <span className="font-mono text-[11px]">burn</span> on {zkSymbol} (zk-wrapped stable). That destroys your zk balance
-                and emits <span className="font-semibold">Burned</span>. The relayer matches your intent to that event, then releases {asset} (underlying) to
-                your recipient. Your redeem intent includes the same 32-byte <span className="font-mono text-[11px]">burnCommitment</span> as the contract
-                call—we set it when you burn from your wallet and read it back from the receipt.
+      {operation === 'LOCK' && sourceChain === 'evm' ? (
+        <div className="mb-5 space-y-3">
+          <button
+            type="button"
+            onClick={() => void evmLockOnChain()}
+            disabled={
+              lockBusy ||
+              walletPending ||
+              !poolLockAddress ||
+              !evmAddress ||
+              !hasPositiveUnderlyingForLock
+            }
+            className="w-full rounded-2xl border-2 border-emerald-700/20 bg-emerald-800 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-950/15 transition-[transform,box-shadow] hover:bg-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 disabled:pointer-events-none disabled:opacity-40 motion-safe:active:scale-[0.99]"
+          >
+            {lockBusy ? 'Confirm in wallet…' : walletPending ? 'Waiting…' : `Lock ${asset} on-chain`}
+          </button>
+          {!poolLockAddress ? (
+            <p className="text-center text-xs leading-snug text-amber-900/90">Set VITE_EVM_POOL_LOCK in .env and rebuild.</p>
+          ) : !evmAddress ? (
+            <div className="space-y-2">
+              <p className="text-center text-xs leading-snug text-amber-900/90">
+                Sign <span className="font-mono text-[10px]">approve</span> + <span className="font-mono text-[10px]">lock</span> with a connected
+                wallet. Balances can show the demo address before you connect — use a button below.
               </p>
-              <p className="text-[11px] leading-snug text-slate-600">
-                <span className="font-semibold text-slate-800">Midnight note:</span> Relayer messages like{' '}
-                <span className="font-mono text-[10px]">proveHolder</span> or <span className="whitespace-nowrap">InsufficientFunds … dust</span> refer to the
-                relayer&apos;s Midnight wallet on the LOCK → Midnight path, not this screen. Fund that wallet with{' '}
-                <span className="font-mono text-[10px]">local-cli fund-and-register-dust</span> if needed.
-              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  className={secondaryBtn}
+                  disabled={evmConnectPending || !primaryEvmConnector}
+                  onClick={() => primaryEvmConnector && connect({ connector: primaryEvmConnector })}
+                >
+                  {evmConnectPending ? 'Connecting…' : 'Connect wallet'}
+                </button>
+                {demoWalletsEnabled() && mockConnector ? (
+                  <button
+                    type="button"
+                    className={cn(
+                      secondaryBtn,
+                      'border-indigo-200 bg-indigo-50 text-indigo-900 hover:border-indigo-300 hover:bg-indigo-100',
+                    )}
+                    disabled={evmConnectPending}
+                    onClick={() => connect({ connector: mockConnector, chainId: hardhat.id })}
+                  >
+                    Use Anvil demo account
+                  </button>
+                ) : null}
+              </div>
+              {evmConnectError ? (
+                <p className="text-center text-[11px] text-red-700">{evmConnectError.message}</p>
+              ) : null}
             </div>
-          </details>
+          ) : !hasPositiveUnderlyingForLock ? (
+            <p className="text-center text-xs leading-snug text-amber-900/90">
+              {underlyingEnvConfigured && sourceChain === 'evm' && (asset === 'USDC' ? liveUsdcBalRaw : liveUsdtBalRaw) === undefined
+                ? `Loading ${asset} balance…`
+                : `No ${asset} balance to lock — fund this account or switch asset.`}
+            </p>
+          ) : null}
+          {lockNote ? <p className="text-center text-xs leading-snug text-emerald-950">{lockNote}</p> : null}
+        </div>
+      ) : null}
+
+      {operation === 'BURN' && sourceChain === 'evm' ? (
+        <div className="mb-5 space-y-3">
           <button
             type="button"
             onClick={() => void burnZkOnChain()}
-            disabled={burnWalletPending || !wrappedTokenAddress || !evmCanBurnZk}
+            disabled={walletPending || !wrappedTokenAddress || !evmCanBurnZk}
             className="w-full rounded-2xl border-2 border-teal-700/20 bg-teal-800 py-3.5 text-sm font-semibold text-white shadow-lg shadow-teal-950/15 transition-[transform,box-shadow] hover:bg-teal-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:pointer-events-none disabled:opacity-40 motion-safe:active:scale-[0.99]"
           >
-            {burnWalletPending ? 'Confirm in wallet…' : `Burn ${zkSymbol} from wallet`}
+            {walletPending ? 'Confirm in wallet…' : `Burn ${zkSymbol} from wallet`}
           </button>
           {burnZkDisabledReason ? (
             <p className="text-center text-xs leading-snug text-amber-900/90">{burnZkDisabledReason}</p>
@@ -1163,192 +1483,147 @@ export const BridgeForm: React.FC<{
 
       {operation === 'BURN' && sourceChain === 'cardano' ? (
         <div className="mb-5 space-y-3 rounded-2xl border border-teal-200/80 bg-teal-50/40 px-4 py-4">
-          <div>
-            <p className="text-[12px] font-semibold text-teal-950">Cardano redeem → EVM</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-slate-700">
-              There is no wallet-level <span className="font-mono text-[10px]">burn</span> for native {zkSymbol} in this bridge: you lock zk at the{' '}
-              <span className="font-semibold">lock_pool</span> script, sign <span className="font-semibold">BridgeRelease</span>, then notify the relayer. Underlying{' '}
-              {asset} is paid on <span className="font-semibold">EVM</span> to your 0x recipient. Indexer:{' '}
-              <span className="font-mono text-[10px]">VITE_YACI_URL</span> or <span className="font-mono text-[10px]">VITE_BLOCKFROST_PROJECT_ID</span>.
-            </p>
-          </div>
+          <p className="text-[12px] font-semibold text-teal-950">Cardano redeem → EVM</p>
+          {cardanoSignBlockedWhy ? (
+            <p className="text-[11px] text-amber-950">{cardanoSignBlockedWhy}</p>
+          ) : null}
 
           <div className="space-y-3 rounded-xl border border-violet-200/90 bg-violet-50/50 px-3 py-3">
-            <p className="text-[11px] font-semibold text-violet-950">Redeem from wallet balance</p>
-            <ol className="list-decimal space-y-2 pl-4 text-[11px] leading-relaxed text-slate-700">
-              <li>
-                <span className="font-semibold">Commitment</span> — must match <span className="font-mono text-[10px]">recipient_commitment</span> in the lock datum
-                and your relayer <span className="font-mono text-[10px]">burnCommitmentHex</span>.
-                <div className="mt-1.5 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className={secondaryBtn}
-                    onClick={() => generateRedeemCommitment()}
-                  >
-                    Generate redeem commitment
-                  </button>
-                </div>
-              </li>
-              <li>
-                <span className="font-semibold">Lock {zkSymbol} at bridge</span> — moves funds from your wallet to the script using the commitment above.
-                <div className="mt-1.5">
-                  <label className="mb-0.5 block text-[10px] font-medium text-slate-600">Lock nonce (optional uint)</label>
-                  <input
-                    className={inputCls + ' mb-2 max-w-[14rem] text-sm'}
-                    value={cardanoLockNonce}
-                    onChange={(e) => setCardanoLockNonce(e.target.value.replace(/\s/g, ''))}
-                    placeholder="Random if empty"
-                    inputMode="numeric"
-                  />
-                  <button
-                    type="button"
-                    disabled={
-                      cardanoRedeemLockBusy ||
-                      !cardanoWalletKey ||
-                      cardanoWalletKey === 'demo' ||
-                      !cardanoZkUnitConfigured
-                    }
-                    onClick={() => void cardanoLockZkForRedeem()}
-                    className="w-full rounded-xl border-2 border-violet-700/25 bg-violet-800 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-900 disabled:opacity-40"
-                  >
-                    {cardanoRedeemLockBusy ? 'Signing…' : `Sign lock at bridge (${zkSymbol})`}
-                  </button>
-                </div>
-              </li>
-              <li>
-                <span className="font-semibold">BridgeRelease</span> — use the button in the section below (works for locks you just created or locks found by
-                Refresh).
-              </li>
-            </ol>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={secondaryBtn} onClick={() => generateRedeemCommitment()}>
+                Generate commitment
+              </button>
+              <button type="button" className={secondaryBtn} disabled={!burnCommitmentFieldValid} onClick={() => void navigator.clipboard.writeText(burnCommitmentBare)}>
+                Copy hex
+              </button>
+            </div>
+            <textarea
+              className={cn(
+                inputCls,
+                'min-h-[3rem] resize-y font-mono text-[11px] leading-snug',
+                burnCommitmentFieldValid ? 'border-emerald-300/90 ring-1 ring-emerald-500/15' : '',
+              )}
+              value={burnCommitmentHex}
+              onChange={(e) =>
+                setBurnCommitmentHex(
+                  e.target.value.replace(/^0x/i, '').replace(/[^0-9a-fA-F]/gu, '').slice(0, 64),
+                )
+              }
+              placeholder="32-byte hex commitment"
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="Redeem burn commitment hex"
+            />
+            <button
+              type="button"
+              disabled={cardanoRedeemLockBusy || !cardanoCanSignBridgeOps || !cardanoZkUnitConfigured}
+              title={signLockAtBridgeTitle}
+              onClick={() => void cardanoLockZkForRedeem()}
+              className="w-full rounded-xl border-2 border-violet-700/25 bg-violet-800 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-900 disabled:opacity-40"
+            >
+              {cardanoRedeemLockBusy ? 'Signing…' : `Lock ${zkSymbol} at bridge`}
+            </button>
             {cardanoRedeemLockNote ? (
-              <p className="text-[11px] leading-snug text-violet-950">{cardanoRedeemLockNote}</p>
+              <p className="text-[11px] text-violet-950">{cardanoRedeemLockNote}</p>
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-start justify-between gap-2 border-t border-teal-200/60 pt-3">
-            <div>
-              <p className="text-[11px] font-semibold text-teal-900">Locks already at bridge script</p>
-              <p className="mt-0.5 text-[10px] leading-relaxed text-slate-600">
-                Recipient-only locks from <span className="font-mono">RELAYER_CARDANO_DESTINATION_LOCK_HOLD</span> or from Step 2 above.
-              </p>
-            </div>
+          <div className="flex items-center justify-between gap-2 border-t border-teal-200/60 pt-3">
+            <p className="text-[11px] font-semibold text-teal-900">Bridge locks</p>
             <button
               type="button"
-              disabled={cardanoLockDiscoverLoading || !cardanoWalletKey || cardanoWalletKey === 'demo' || !cardanoZkUnitConfigured}
+              disabled={cardanoLockDiscoverLoading || !cardanoCanSignBridgeOps || !cardanoDiscoverUnitsConfigured}
               onClick={() => setCardanoLocksRefreshKey((k) => k + 1)}
               className="shrink-0 rounded-lg border border-teal-300/80 bg-white px-3 py-1.5 text-[11px] font-semibold text-teal-900 shadow-sm hover:bg-teal-50 disabled:opacity-40"
             >
-              {cardanoLockDiscoverLoading ? 'Refreshing…' : 'Refresh locks'}
+              {cardanoLockDiscoverLoading ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
-          {!cardanoZkUnitConfigured ? (
-            <p className="rounded-lg border border-amber-200/80 bg-amber-50/90 px-3 py-2 text-[11px] text-amber-950">
-              Set <span className="font-mono text-[10px]">VITE_CARDANO_WUSDC_UNIT</span> /{' '}
-              <span className="font-mono text-[10px]">VITE_CARDANO_WUSDT_UNIT</span> for the selected asset so the UI can find zk native locks on-chain.
-            </p>
-          ) : null}
-          {cardanoLockDiscoverLoading ? (
-            <p className="text-center text-[12px] font-medium text-teal-900">Fetching zk lock UTxOs at the bridge script…</p>
-          ) : null}
           {cardanoLockDiscoverErr ? (
-            <p className="rounded-lg border border-red-200/80 bg-red-50/90 px-3 py-2 text-[11px] text-red-900">{cardanoLockDiscoverErr}</p>
-          ) : null}
-          {!cardanoLockDiscoverLoading && cardanoZkUnitConfigured && cardanoLockCandidates.length === 0 && !cardanoLockDiscoverErr ? (
-            <p className="text-[11px] leading-relaxed text-slate-600">
-              No script locks listed yet — use <span className="font-semibold">Redeem from wallet balance</span> (Step 2) to create one, or{' '}
-              <span className="font-semibold">Refresh locks</span> after a mint with{' '}
-              <span className="font-mono text-[10px]">RELAYER_CARDANO_DESTINATION_LOCK_HOLD=true</span>. Match{' '}
-              <span className="font-mono text-[10px]">VITE_CARDANO_WUSDC_UNIT</span> / <span className="font-mono text-[10px]">WUSDT_UNIT</span> to the relayer mint
-              policy.
-            </p>
+            <p className="text-[11px] text-red-900">{cardanoLockDiscoverErr}</p>
           ) : null}
           {cardanoLockCandidates.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Select lock to release</p>
-              <ul className="space-y-2">
-                {cardanoLockCandidates.map((c) => {
-                  const selected = cardanoLockTx === c.txHash && cardanoLockIdx === String(c.outputIndex);
-                  const zk = c.assetLabel === 'USDC' ? 'zkUSDC' : 'zkUSDT';
-                  const short = c.txHash.length >= 20 ? `${c.txHash.slice(0, 10)}…${c.txHash.slice(-6)}` : c.txHash;
-                  return (
-                    <li key={`${c.txHash}#${c.outputIndex}`}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCardanoLockTx(c.txHash);
-                          setCardanoLockIdx(String(c.outputIndex));
-                          setCardanoRedeemNote(null);
-                        }}
-                        className={cn(
-                          'w-full rounded-xl border px-3 py-2.5 text-left text-[12px] transition-colors',
-                          selected
-                            ? 'border-teal-600 bg-white shadow-sm ring-2 ring-teal-500/25'
-                            : 'border-teal-200/70 bg-white/80 hover:border-teal-400 hover:bg-white',
-                        )}
-                      >
-                        <span className="font-semibold text-teal-950">
-                          {c.amountFormatted} {zk}
-                        </span>
-                        <span className="ml-2 font-mono text-[11px] text-slate-600">
-                          #{c.outputIndex} · {short}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+            <ul className="space-y-2">
+              {cardanoLockCandidates.map((c) => {
+                const selected = cardanoLockTx === c.txHash && cardanoLockIdx === String(c.outputIndex);
+                const zk = c.assetLabel === 'USDC' ? 'zkUSDC' : 'zkUSDT';
+                const short = c.txHash.length >= 20 ? `${c.txHash.slice(0, 10)}…${c.txHash.slice(-6)}` : c.txHash;
+                return (
+                  <li key={`${c.txHash}#${c.outputIndex}`}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCardanoLockTx(c.txHash);
+                        setCardanoLockIdx(String(c.outputIndex));
+                        setCardanoRedeemNote(null);
+                      }}
+                      className={cn(
+                        'w-full rounded-xl border px-3 py-2.5 text-left text-[12px] transition-colors',
+                        selected
+                          ? 'border-teal-600 bg-white shadow-sm ring-2 ring-teal-500/25'
+                          : 'border-teal-200/70 bg-white/80 hover:border-teal-400 hover:bg-white',
+                      )}
+                    >
+                      <span className="font-semibold text-teal-950">{c.amountFormatted} {zk}</span>
+                      <span className="ml-2 font-mono text-[11px] text-slate-600">#{c.outputIndex} · {short}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           ) : null}
           <button
             type="button"
-            disabled={
-              cardanoRedeemBusy ||
-              !cardanoWalletKey ||
-              cardanoWalletKey === 'demo' ||
-              cardanoLockDiscoverLoading ||
-              !cardanoLockTxValid
-            }
+            disabled={cardanoRedeemBusy || !cardanoCanSignBridgeOps || cardanoLockDiscoverLoading || !cardanoLockTxValid}
             onClick={() => void cardanoUserBridgeRelease()}
             className="w-full rounded-xl border-2 border-teal-700/25 bg-teal-800 py-3 text-sm font-semibold text-white shadow-md transition-colors hover:bg-teal-900 disabled:opacity-40"
           >
-            {cardanoRedeemBusy ? 'Signing…' : 'Sign BridgeRelease in wallet'}
+            {cardanoRedeemBusy ? 'Signing…' : 'Sign BridgeRelease'}
           </button>
           {cardanoRedeemNote ? <p className="text-center text-[11px] text-teal-950">{cardanoRedeemNote}</p> : null}
-          <p className="text-[10px] leading-snug text-slate-600">
-            After release, the spend tx id and <span className="font-mono">recipient_commitment</span> are filled for the relayer POST.
-          </p>
         </div>
       ) : null}
 
       {operation === 'BURN' && sourceChain === 'midnight' ? (
         <div className="mb-5 space-y-3 rounded-2xl border border-indigo-200/80 bg-indigo-50/40 px-4 py-4">
           <p className="text-[12px] font-semibold text-indigo-950">Midnight redeem → EVM</p>
-          <p className="text-[11px] leading-relaxed text-slate-700">
-            Call <span className="font-mono text-[10px]">initiateBurn(destChain, recipientComm)</span> on your joined zk-stables contract. The commitment must match{' '}
-            <span className="font-mono text-[10px]">burnCommitmentHex</span> below. Underlying <span className="font-semibold">{asset}</span> is paid on{' '}
-            <span className="font-semibold">EVM</span> — recipient above must be 0x….
-          </p>
-          <div className="flex flex-wrap items-end gap-2 rounded-xl border border-indigo-200/70 bg-white/80 px-3 py-3">
-            <div className="min-w-[8rem] flex-1">
-              <label className="mb-1 block text-[10px] font-medium text-slate-600">Destination chain id</label>
-              <input
-                className={inputCls + ' text-sm'}
-                value={midnightDestChainInput}
-                onChange={(e) => setMidnightDestChainInput(e.target.value.replace(/\s/g, ''))}
-                placeholder="e.g. 2"
-                inputMode="numeric"
-              />
-            </div>
-            <button type="button" className={secondaryBtn} onClick={() => generateRedeemCommitment()}>
-              Generate redeem commitment
-            </button>
+          <div className="space-y-2 rounded-xl border border-indigo-200/70 bg-white/80 px-3 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-700">Select deposit to burn</p>
+            {ledger && ledger.deposits.filter((d) => d.status === 1).length > 0 ? (
+              <div className="space-y-1.5">
+                {ledger.deposits.filter((d) => d.status === 1).map((d) => {
+                  const selected = burnCommitmentHex === d.depositCommitmentHex;
+                  return (
+                    <button
+                      key={d.depositCommitmentHex}
+                      type="button"
+                      onClick={() => setBurnCommitmentHex(d.depositCommitmentHex)}
+                      className={cn(
+                        'w-full rounded-xl border px-3 py-2.5 text-left text-[12px] transition-colors',
+                        selected
+                          ? 'border-indigo-600 bg-white shadow-sm ring-2 ring-indigo-500/25'
+                          : 'border-indigo-200/70 bg-white/80 hover:border-indigo-400 hover:bg-white',
+                      )}
+                    >
+                      <span className="font-semibold text-indigo-950">{d.assetKind === 0 ? 'zkUSDC' : 'zkUSDT'} · {d.amount.toString()}</span>
+                      <span className="ml-2 font-mono text-[10px] text-slate-500">{d.depositCommitmentHex.slice(0, 10)}…{d.depositCommitmentHex.slice(-6)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-[11px] text-amber-900">No active deposits — bridge a LOCK (EVM → Midnight) first.</p>
+            )}
+            {burnCommitmentFieldValid ? (
+              <p className="break-all font-mono text-[10px] text-slate-500">{burnCommitmentHex}</p>
+            ) : null}
             <button
               type="button"
-              disabled={midnightBurnBusy || !midnightConnected || !canInitiateBurn}
+              disabled={midnightBurnBusy || !midnightConnected || !burnCommitmentFieldValid}
               onClick={() => void midnightInitiateBurnFromBridge()}
-              className="rounded-xl border-2 border-indigo-700/25 bg-indigo-800 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-900 disabled:opacity-40"
+              className="w-full rounded-xl border-2 border-indigo-700/25 bg-indigo-800 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-900 disabled:opacity-40"
             >
-              {midnightBurnBusy ? 'Proving / signing…' : `Run initiateBurn (${zkSymbol})`}
+              {midnightBurnBusy ? 'Proving…' : `initiateBurn (${zkSymbol})`}
             </button>
           </div>
           {midnightFlowMessage ? (
@@ -1356,45 +1631,26 @@ export const BridgeForm: React.FC<{
           ) : null}
           {midnightBurnNote ? <p className="text-center text-[11px] text-indigo-950">{midnightBurnNote}</p> : null}
           {!midnightConnected ? (
-            <p className="text-[10px] text-amber-900">Connect Midnight (Lace or dev seed) and deploy/join the contract first.</p>
-          ) : !canInitiateBurn ? (
-            <p className="text-[10px] text-slate-600">
-              Ledger state must allow initiateBurn (often after mint path). Use <span className="font-semibold">Developer tools → Circuits</span> if you need proveHolder / mint steps first.
-            </p>
+            <p className="text-[10px] text-amber-900">Connect Midnight wallet first.</p>
           ) : null}
           {lastMidnightBurnAnchor ? (
-            <div className="space-y-2 rounded-xl border border-indigo-200/70 bg-white/90 px-3 py-3 text-[11px] shadow-sm">
-              <div className="flex flex-wrap gap-x-2 gap-y-1">
-                <span className="font-semibold text-slate-600">Tx id</span>
+            <div className="space-y-1 rounded-xl border border-indigo-200/70 bg-white/90 px-3 py-2.5 text-[11px]">
+              <div className="flex flex-wrap gap-x-2">
+                <span className="font-semibold text-slate-600">Tx</span>
                 <span className="break-all font-mono text-slate-900" title={lastMidnightBurnAnchor.txId}>
                   {lastMidnightBurnAnchor.txId.length > 36
                     ? `${lastMidnightBurnAnchor.txId.slice(0, 18)}…${lastMidnightBurnAnchor.txId.slice(-14)}`
                     : lastMidnightBurnAnchor.txId}
                 </span>
               </div>
-              <div className="flex flex-wrap gap-x-2">
-                <span className="font-semibold text-slate-600">Dest chain</span>
-                <span className="font-mono text-slate-900">{lastMidnightBurnAnchor.destChain}</span>
-              </div>
-              <div className="flex flex-wrap gap-x-2 gap-y-1">
-                <span className="font-semibold text-slate-600">Commitment</span>
-                <span className="break-all font-mono text-[10px] text-slate-800" title={lastMidnightBurnAnchor.recipientCommHex64}>
-                  {lastMidnightBurnAnchor.recipientCommHex64}
-                </span>
-              </div>
               {lastMidnightBurnAnchor.txHash ? (
-                <div className="flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-slate-500">
-                  <span className="font-semibold">Tx hash</span>
+                <div className="flex flex-wrap gap-x-2 text-[10px] text-slate-500">
+                  <span className="font-semibold">Hash</span>
                   <span className="break-all font-mono">{lastMidnightBurnAnchor.txHash}</span>
                 </div>
               ) : null}
             </div>
-          ) : (
-            <p className="rounded-lg border border-amber-200/80 bg-amber-50/90 px-3 py-2 text-[11px] text-amber-950">
-              No <span className="font-mono text-[10px]">initiateBurn</span> anchor in this session yet. Generate a commitment above, then run{' '}
-              <span className="font-semibold">initiateBurn</span> — or use Developer tools → Circuits for the same call.
-            </p>
-          )}
+          ) : null}
         </div>
       ) : null}
 
@@ -1421,6 +1677,11 @@ export const BridgeForm: React.FC<{
         redeemBurnStatus={redeemBurnStatus}
         burnTxSummary={burnTxShort}
         crossChainRedeemToEvm={operation === 'BURN' && (sourceChain === 'cardano' || sourceChain === 'midnight')}
+        evmLockAnchorSummary={
+          operation === 'LOCK' && evmLockAnchor
+            ? `${evmLockAnchor.txHash.slice(0, 12)}… · log ${evmLockAnchor.logIndex} · block ${evmLockAnchor.blockNumber}`
+            : undefined
+        }
       />
     </div>
   );

@@ -1,13 +1,19 @@
-import React from 'react';
-import { Alert, Button, Card, CardContent, Stack, TextField, Typography } from '@mui/material';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Alert, Button, Card, CardContent, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { useZkStables } from '../hooks/useZkStables.js';
+
+function hexToUint8Array(hex: string): Uint8Array {
+  const clean = hex.replace(/^0x/i, '');
+  const arr = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < arr.length; i++) arr[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  return arr;
+}
 
 export const CircuitActions: React.FC = () => {
   const {
     isConnected,
     contractAddress,
-    burnDestChain,
-    setBurnDestChain,
+    ledger,
     recipientCommHex,
     setRecipientCommHex,
     sendToAddressInput,
@@ -25,14 +31,54 @@ export const CircuitActions: React.FC = () => {
     flowMessage,
   } = useZkStables();
 
+  const [selectedDepHex, setSelectedDepHex] = useState('');
+
+  const depositOptions = useMemo(
+    () => (ledger?.deposits ?? []).map((d) => ({
+      hex: d.depositCommitmentHex,
+      label: `${d.depositCommitmentHex.slice(0, 8)}… · ${d.statusLabel} · ${d.assetKind === 0 ? 'USDC' : 'USDT'}`,
+      status: d.status,
+    })),
+    [ledger],
+  );
+
+  const selectedDep = useMemo(
+    () => (selectedDepHex ? hexToUint8Array(selectedDepHex) : undefined),
+    [selectedDepHex],
+  );
+
+  const depStatus = useMemo(
+    () => depositOptions.find((o) => o.hex === selectedDepHex)?.status ?? 0,
+    [depositOptions, selectedDepHex],
+  );
+
+  const handleProveHolder = useCallback(() => {
+    if (selectedDep) void proveHolder(selectedDep);
+  }, [proveHolder, selectedDep]);
+
+  const handleMint = useCallback(() => {
+    if (selectedDep) void mintWrappedUnshielded(selectedDep);
+  }, [mintWrappedUnshielded, selectedDep]);
+
+  const handleInitiateBurn = useCallback(() => {
+    if (selectedDep) void initiateBurn({ depositCommitment: selectedDep, destChain: '2' });
+  }, [initiateBurn, selectedDep]);
+
+  const handleSendWrapped = useCallback(() => {
+    if (selectedDep) void sendWrappedUnshieldedToUser(selectedDep);
+  }, [sendWrappedUnshieldedToUser, selectedDep]);
+
+  const handleFinalizeBurn = useCallback(() => {
+    if (selectedDep) void finalizeBurn(selectedDep);
+  }, [finalizeBurn, selectedDep]);
+
+  const noDeposits = depositOptions.length === 0;
+
   return (
     <Card id="panel-circuits" variant="outlined">
       <CardContent>
         <Typography variant="h6" component="h3" gutterBottom>
-          Midnight contract actions
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Buttons call the zk-stables Compact contract using the same names as in code (<code>proveHolder</code>, etc.).
+          Midnight registry actions
         </Typography>
         {!isConnected && (
           <Alert severity="warning">Connect Midnight Lace (or dev seed) to sign transactions.</Alert>
@@ -45,65 +91,62 @@ export const CircuitActions: React.FC = () => {
             {flowMessage}
           </Alert>
         )}
+
+        <TextField
+          select
+          label="Select deposit"
+          size="small"
+          fullWidth
+          value={selectedDepHex}
+          onChange={(e) => setSelectedDepHex(e.target.value)}
+          sx={{ mt: 2 }}
+          disabled={noDeposits}
+          helperText={noDeposits ? 'No deposits registered yet — bridge a LOCK first.' : undefined}
+        >
+          {depositOptions.map((o) => (
+            <MenuItem key={o.hex} value={o.hex}>
+              {o.label}
+            </MenuItem>
+          ))}
+        </TextField>
+
         <Typography variant="subtitle2" color="primary.light" sx={{ mt: 2 }}>
-          Holder steps
+          Mint steps (status: Active)
         </Typography>
         <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mt: 1 }}>
           <Button
             variant="outlined"
-            disabled={!isConnected || !contractAddress || !canProveHolder}
-            onClick={() => void proveHolder()}
-            title="Contract method: proveHolder"
+            disabled={!isConnected || !contractAddress || !selectedDep || !canProveHolder || depStatus !== 1}
+            onClick={handleProveHolder}
           >
             Prove holder
           </Button>
-        </Stack>
-        <Typography variant="subtitle2" color="secondary.light" sx={{ mt: 2 }}>
-          Operator steps
-        </Typography>
-        <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mt: 1 }}>
           <Button
             variant="outlined"
-            disabled={!isConnected || !contractAddress || !canMint}
-            onClick={() => void mintWrappedUnshielded()}
-            title="Contract method: mintWrappedUnshielded"
+            disabled={!isConnected || !contractAddress || !selectedDep || !canMint || depStatus !== 1}
+            onClick={handleMint}
           >
             Mint wrapped (unshielded)
           </Button>
-          <Button
-            variant="outlined"
-            disabled={!isConnected || !contractAddress || !canFinalizeBurn}
-            onClick={() => void finalizeBurn()}
-            title="Contract method: finalizeBurn"
-          >
-            Finalize burn
-          </Button>
         </Stack>
+
         <Typography variant="subtitle2" color="primary.light" sx={{ mt: 2 }}>
-          Holder — burn and transfer
+          Burn flow (1 → 2 → 3)
         </Typography>
         <Stack spacing={1.5} sx={{ mt: 1 }}>
-          <TextField
-            label="Destination chain id (for initiateBurn)"
-            size="small"
-            value={burnDestChain}
-            onChange={(e) => setBurnDestChain(e.target.value)}
-          />
           <TextField
             label="Recipient commitment (64 hex)"
             size="small"
             fullWidth
             value={recipientCommHex}
             onChange={(e) => setRecipientCommHex(e.target.value.replace(/\s/g, ''))}
-            helperText="Used by initiateBurn on the contract."
           />
           <Button
             variant="outlined"
-            disabled={!isConnected || !contractAddress || !canInitiateBurn}
-            onClick={() => void initiateBurn()}
-            title="Contract method: initiateBurn"
+            disabled={!isConnected || !contractAddress || !selectedDep || !canInitiateBurn || depStatus !== 1}
+            onClick={handleInitiateBurn}
           >
-            Start burn
+            1. Start burn (initiateBurn)
           </Button>
           <TextField
             label="Recipient Midnight address (mn_addr… or hex)"
@@ -111,15 +154,20 @@ export const CircuitActions: React.FC = () => {
             fullWidth
             value={sendToAddressInput}
             onChange={(e) => setSendToAddressInput(e.target.value)}
-            helperText="For sendWrappedUnshieldedToUser."
           />
           <Button
             variant="outlined"
-            disabled={!isConnected || !contractAddress || !canSendWrapped}
-            onClick={() => void sendWrappedUnshieldedToUser()}
-            title="Contract method: sendWrappedUnshieldedToUser"
+            disabled={!isConnected || !contractAddress || !selectedDep || !canSendWrapped || depStatus !== 2}
+            onClick={handleSendWrapped}
           >
-            Send wrapped to user
+            2. Send wrapped to user
+          </Button>
+          <Button
+            variant="outlined"
+            disabled={!isConnected || !contractAddress || !selectedDep || !canFinalizeBurn || depStatus !== 2}
+            onClick={handleFinalizeBurn}
+          >
+            3. Finalize burn
           </Button>
         </Stack>
       </CardContent>

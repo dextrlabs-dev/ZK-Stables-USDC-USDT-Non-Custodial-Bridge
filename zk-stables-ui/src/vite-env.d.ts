@@ -22,6 +22,15 @@ interface ImportMetaEnv {
    * In dev, `/yaci-store` is proxied by Vite to avoid CORS — set to that path or full URL.
    */
   readonly VITE_YACI_STORE_URL?: string;
+  /** Yaci Blockfrost-compatible API base for Mesh submit/query (defaults from `VITE_YACI_STORE_URL` when unset). */
+  readonly VITE_YACI_URL?: string;
+  readonly VITE_YACI_ADMIN_URL?: string;
+  /** `0` testnet / `1` mainnet — align with `RELAYER_CARDANO_NETWORK_ID`. */
+  readonly VITE_CARDANO_NETWORK_ID?: string;
+  /**
+   * Same phrase as `RELAYER_CARDANO_WALLET_MNEMONIC` — in-app Mesh signing (auto-selected on load). Inlined into the bundle.
+   */
+  readonly VITE_DEMO_CARDANO_WALLET_MNEMONIC?: string;
   /** Full native asset unit hex (policyId + assetName) for Cardano wUSDC balance via Yaci. */
   readonly VITE_CARDANO_WUSDC_UNIT?: string;
   readonly VITE_CARDANO_WUSDT_UNIT?: string;
@@ -39,7 +48,7 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
-/** CIP-30 injected wallets (Eternl, Nami, Lace Cardano, etc.). */
+/** Optional `window.cardano` shape (unused by this UI; Cardano signing is mnemonic Mesh only). */
 interface Window {
   cardano?: Record<string, { enable?: () => Promise<unknown> }>;
 }

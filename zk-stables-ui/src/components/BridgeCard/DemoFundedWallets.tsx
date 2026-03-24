@@ -100,12 +100,12 @@ export const DemoFundedWallets: React.FC<{ demo: DemoWalletsResponse }> = ({ dem
                 <span className="font-mono font-medium text-slate-700">{rows[0].usdt ?? '—'}</span> USDT
               </>
             ) : (
-              <span className="text-slate-400">load the table or set USDC/USDT env addresses</span>
+              <span className="text-slate-400">fetching balances…</span>
             )}
           </p>
         </div>
 
-        {!usdc && !usdt ? (
+        {!usdc && !usdt && import.meta.env.DEV ? (
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
             Set <code className="rounded bg-white px-1 font-mono text-[10px]">VITE_DEMO_USDC_ADDRESS</code> and{' '}
             <code className="rounded bg-white px-1 font-mono text-[10px]">VITE_DEMO_USDT_ADDRESS</code> in{' '}

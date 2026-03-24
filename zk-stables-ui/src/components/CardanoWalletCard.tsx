@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, CardContent, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import React from 'react';
+import { Alert, Button, Card, CardContent, Chip, Stack, Typography } from '@mui/material';
 import { useCrossChainWallets } from '../contexts/CrossChainWalletContext.js';
+import { isDemoCardanoMnemonicConfigured } from '../cardano/demoMnemonicMeshWallet.js';
 
 export const CardanoWalletCard: React.FC = () => {
   const {
@@ -11,50 +12,33 @@ export const CardanoWalletCard: React.FC = () => {
     isDemoCardano,
     cardanoBech32Preview,
     applyDemoCardano,
-    listCardanoWallets,
-    connectCardano,
     disconnectCardano,
   } = useCrossChainWallets();
 
-  const [keys, setKeys] = useState<string[]>([]);
-  const [selected, setSelected] = useState('');
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const t = window.setInterval(() => setKeys(listCardanoWallets()), 600);
-    return () => window.clearInterval(t);
-  }, [listCardanoWallets]);
-
-  useEffect(() => {
-    if (keys.length && !selected) setSelected(keys[0]!);
-  }, [keys, selected]);
+  const mnemonicOk = isDemoCardanoMnemonicConfigured();
+  const connected = Boolean(cardanoWalletKey && cardanoDisplay);
 
   return (
     <Card id="panel-cardano" variant="outlined">
       <CardContent>
         <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 0.5 }}>
           <Typography variant="h6" component="h3">
-            Cardano (CIP-30)
+            Cardano (in-app signing)
           </Typography>
-          {isDemoCardano && <Chip size="small" label="Synthetic demo" color="secondary" variant="outlined" />}
+          {isDemoCardano && <Chip size="small" label="Demo row" color="secondary" variant="outlined" />}
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Connect a Cardano browser wallet (CIP-30) for address discovery. On-chain Plutus lock/unlock flows are not wired in
-          this demo yet.
+          Lock and BridgeRelease use <code>VITE_DEMO_CARDANO_WALLET_MNEMONIC</code> (same phrase as{' '}
+          <code>RELAYER_CARDANO_WALLET_MNEMONIC</code>) baked into the build. The UI turns this on automatically when the env var
+          is set; there is no browser extension connect.
         </Typography>
-        {keys.length === 0 && (
-          <Alert severity="info" sx={{ mb: 2 }}>
-            No Cardano extension found (<code>window.cardano</code>). Install a CIP-30 wallet (e.g. Eternl, Nami), enable it
-            for this site, then refresh.
+        {!mnemonicOk && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Set <code>VITE_DEMO_CARDANO_WALLET_MNEMONIC</code> in <code>.env.development</code> / <code>.env.production</code>,
+            rebuild, then reload. Without it you only get a synthetic address preview (no signing).
           </Alert>
         )}
-        {err && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr(null)}>
-            {err}
-          </Alert>
-        )}
-        {cardanoWalletKey && cardanoDisplay && (
+        {connected && (
           <Typography variant="body2" sx={{ mb: 1 }}>
             <strong>{cardanoWalletKey}</strong>
             {' · Network id '}
@@ -73,40 +57,19 @@ export const CardanoWalletCard: React.FC = () => {
             </Typography>
           </Typography>
         )}
+        {!connected && mnemonicOk && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Disconnected — restore the in-app wallet to load addresses from the mnemonic.
+          </Typography>
+        )}
         <Stack direction="row" flexWrap="wrap" gap={1} alignItems="center">
-          <TextField
-            select
-            size="small"
-            label="Extension"
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            sx={{ minWidth: 160 }}
-            disabled={!keys.length}
-          >
-            {keys.map((k) => (
-              <MenuItem key={k} value={k}>
-                {k}
-              </MenuItem>
-            ))}
-          </TextField>
-          <Button
-            variant="contained"
-            disabled={!selected || !!cardanoWalletKey || busy}
-            onClick={() => {
-              setErr(null);
-              setBusy(true);
-              void connectCardano(selected)
-                .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
-                .finally(() => setBusy(false));
-            }}
-          >
-            {busy ? 'Connecting…' : 'Connect Cardano'}
-          </Button>
+          {!cardanoWalletKey ? (
+            <Button variant="contained" onClick={applyDemoCardano}>
+              {mnemonicOk ? 'Restore in-app wallet' : 'Use synthetic preview (no signing)'}
+            </Button>
+          ) : null}
           <Button variant="outlined" disabled={!cardanoWalletKey} onClick={disconnectCardano}>
             Disconnect
-          </Button>
-          <Button variant="text" size="small" disabled={!!cardanoWalletKey} onClick={applyDemoCardano}>
-            Use synthetic demo (no extension)
           </Button>
         </Stack>
       </CardContent>

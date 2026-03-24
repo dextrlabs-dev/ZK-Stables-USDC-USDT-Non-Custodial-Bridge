@@ -27,6 +27,8 @@ export const ReviewSheet: React.FC<{
   burnTxSummary?: string;
   /** When true, underlying stable is paid on EVM after a Cardano/Midnight zk burn. */
   crossChainRedeemToEvm?: boolean;
+  /** Mint path: short summary of the anchored `pool.lock` tx (if any). */
+  evmLockAnchorSummary?: string;
 }> = ({
   open,
   onClose,
@@ -42,6 +44,7 @@ export const ReviewSheet: React.FC<{
   redeemBurnStatus = 'n/a',
   burnTxSummary,
   crossChainRedeemToEvm = false,
+  evmLockAnchorSummary,
 }) => (
   <Dialog
     open={open}
@@ -56,7 +59,7 @@ export const ReviewSheet: React.FC<{
     <DialogContent className="!px-6 !pb-2">
       <p className="text-sm leading-relaxed text-slate-600">
         {operation === 'LOCK'
-          ? 'Lock USDC/USDT on EVM. The relayer observes finality, then mints or credits zk on your destination chain.'
+          ? 'USDC/USDT must already be in the pool from an on-chain approve + lock. The relayer proves that lock, then mints zk on the destination chain — no mint without that deposit.'
           : crossChainRedeemToEvm
             ? `Redeem: you burn ${zkAssetLabel ?? 'zk stable'} on ${sourceChain}; the relayer verifies the anchor, then pays ${asset} (underlying) on EVM to your 0x recipient.`
             : `Redeem: you burn ${zkAssetLabel ?? 'zk stable'} on EVM; the relayer verifies the burn, then unlocks ${asset} (underlying) to your recipient.`}
@@ -67,6 +70,9 @@ export const ReviewSheet: React.FC<{
         {operation === 'LOCK' ? <Row label="To" value={destChain} /> : null}
         <Row label={operation === 'LOCK' ? 'Asset' : 'Burn / unlock'} value={operation === 'LOCK' ? asset : `${zkAssetLabel ?? 'zk'} → ${asset}`} />
         <Row label={operation === 'BURN' ? 'Amount (burn + unlock)' : 'Amount'} value={amount} />
+        {operation === 'LOCK' && evmLockAnchorSummary ? (
+          <Row label="On-chain lock" value={evmLockAnchorSummary} mono />
+        ) : null}
         <Row
           label="Recipient"
           value={recipient.length > 36 ? shortenAddress(recipient) : recipient}
@@ -78,7 +84,7 @@ export const ReviewSheet: React.FC<{
             label="On-chain anchor"
             value={
               redeemBurnStatus === 'non-evm'
-                ? 'Legacy stub (avoid — use chain-specific flow)'
+                ? 'Non-EVM burn (use chain-specific redeem)'
                 : redeemBurnStatus === 'evm-ready'
                   ? `${burnTxSummary ?? 'Tx'} · linked to intent`
                   : redeemBurnStatus === 'cardano-ready'
@@ -88,7 +94,7 @@ export const ReviewSheet: React.FC<{
                       : redeemBurnStatus === 'cardano-pending'
                         ? 'Complete Cardano BridgeRelease + lock ref first'
                         : redeemBurnStatus === 'midnight-pending'
-                          ? 'Run initiateBurn (Developer tools) or fill anchor first'
+                          ? 'Run initiateBurn on Midnight first'
                           : 'Complete wallet burn first'
             }
           />

@@ -13,6 +13,10 @@ out/
 .env
 .env.*
 !.env.example
+# Tracked defaults so `vite build --mode production` inlines the same local-demo stack as .env.development.
+!zk-stables-ui/.env.production
+# Tracked template: `npm run start:prod` loads EVM cross-chain unlock defaults (no secrets).
+!zk-stables-relayer/.env.production
 
 # Logs and debug
 *.log

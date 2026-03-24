@@ -12,12 +12,17 @@
     "fund:cardano-yaci": "node scripts/fund-cardano-demo-from-yaci.mjs",
     "fund:evm-seed-zk": "sh -c 'cd evm && ADDRS_JSON=\"${ADDRS_JSON:-/tmp/zk-stables-anvil-addrs.json}\" npx hardhat run scripts/seed-wrapped-balances-anvil.js --network anvil'",
     "fund:local": "npm run fund:cardano-yaci && npm run fund:evm-seed-zk",
+    "demo:wipe-cardano-yaci": "bash scripts/local-wipe-yaci-chain.sh",
+    "demo:mint-evm-mock": "cd evm && npx hardhat run scripts/mint-mock-underlying-anvil.js --network anvil",
+    "demo:write-anvil-addrs-tmp": "node scripts/write-anvil-addrs-tmp-from-relayer-env.mjs",
+    "demo:refresh-local-mint": "npm run demo:wipe-cardano-yaci && npm run fund:cardano-yaci && npm run demo:mint-evm-mock && npm run demo:write-anvil-addrs-tmp && npm run fund:evm-seed-zk",
     "test:cardano-local": "./scripts/test-cardano-local.sh",
     "postinstall": "patch-package --patch-dir local-cli/patches && node scripts/postinstall-libsodium.mjs",
     "contract:compact": "npm run compact -w @zk-stables/midnight-contract",
     "contract:build": "npm run build -w @zk-stables/midnight-contract",
     "run-genesis": "npm run run-genesis -w @zk-stables/local-cli",
-    "run-registry-all": "npm run run-registry-all -w @zk-stables/local-cli"
+    "run-registry-all": "npm run run-registry-all -w @zk-stables/local-cli",
+    "bridge-flow-report": "node scripts/full-bridge-flow-report.mjs"
   },
   "devDependencies": {
     "patch-package": "^8.0.0"

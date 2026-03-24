@@ -1,3 +1,9 @@
+import type { UTxO } from '@meshsdk/common';
+import { cardanoNativeUnitsEquivalent } from '../cardano/cardanoNativeUnitMatch.js';
+
+/** Avoid HTTP disk cache serving a stale 503 from when Yaci was down (same URL as a later success). */
+const yaciFetchInit: RequestInit = { cache: 'no-store' };
+
 async function readYaciErrorBody(r: Response): Promise<string> {
   try {
     const t = await r.text();
@@ -18,23 +24,6 @@ export function resolveYaciStoreBaseUrl(): string | null {
   return raw;
 }
 
-const YACI_PROBE_TIMEOUT_MS = 4000;
-
-/** Single cheap request to see if Yaci Store (or the Vite proxy to it) is up. Avoids hammering `/addresses/.../utxos` when the backend is down. */
-export async function isYaciStoreReachable(yaciStoreBaseUrl: string): Promise<boolean> {
-  const base = yaciStoreBaseUrl.trim().replace(/\/+$/u, '');
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), YACI_PROBE_TIMEOUT_MS);
-  try {
-    const r = await fetch(`${base}/blocks/latest`, { signal: ac.signal });
-    return r.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 /**
  * Sum ADA (lovelace) for a bech32 address via Yaci Store Blockfrost-compatible API.
  * Same pagination as zk-stables-relayer `yaciAddressUtxos`.
@@ -45,7 +34,7 @@ export async function fetchYaciAddressAda(params: { yaciStoreBaseUrl: string; be
   let totalLovelace = 0n;
 
   for (let page = 1; page < 10_000; page++) {
-    const r = await fetch(`${base}/addresses/${enc}/utxos?page=${page}`);
+    const r = await fetch(`${base}/addresses/${enc}/utxos?page=${page}`, yaciFetchInit);
     if (!r.ok) {
       const detail = await readYaciErrorBody(r);
       const hint =
@@ -82,10 +71,11 @@ export async function fetchYaciAddressNativeAssetQuantity(params: {
   const enc = encodeURIComponent(params.bech32.trim());
   const unit = params.assetUnit.trim();
   if (!unit) return 0n;
+  const target = unit.toLowerCase();
   let total = 0n;
 
   for (let page = 1; page < 10_000; page++) {
-    const r = await fetch(`${base}/addresses/${enc}/utxos?page=${page}`);
+    const r = await fetch(`${base}/addresses/${enc}/utxos?page=${page}`, yaciFetchInit);
     if (!r.ok) {
       const detail = await readYaciErrorBody(r);
       const hint =
@@ -98,11 +88,107 @@ export async function fetchYaciAddressNativeAssetQuantity(params: {
     if (!Array.isArray(j)) throw new Error('Yaci Store: unexpected UTxO response');
     if (j.length === 0) break;
     for (const u of j as Array<{ amount?: Array<{ unit: string; quantity: string }> }>) {
-      const a = u.amount?.find((x) => x.unit === unit);
-      if (a) total += BigInt(a.quantity);
+      for (const x of u.amount ?? []) {
+        if (cardanoNativeUnitsEquivalent(x.unit, target)) {
+          try {
+            total += BigInt(String(x.quantity));
+          } catch {
+            /* ignore */
+          }
+        }
+      }
     }
   }
   return total;
+}
+
+/** Blockfrost `GET /addresses/{addr}/utxos` item (Yaci Store compatible). */
+type BfAddressUtxo = {
+  tx_hash: string;
+  output_index: number;
+  address: string;
+  amount: Array<{ unit: string; quantity: string | number }>;
+  data_hash?: string | null;
+  inline_datum?: string | null;
+  reference_script_hash?: string | null;
+};
+
+function bfAddressUtxoToMeshUtxo(item: BfAddressUtxo): UTxO {
+  return {
+    input: {
+      outputIndex: item.output_index,
+      txHash: item.tx_hash,
+    },
+    output: {
+      address: item.address,
+      amount: item.amount.map((a) => ({ unit: a.unit, quantity: String(a.quantity) })),
+      dataHash: item.data_hash ?? undefined,
+      plutusData: item.inline_datum ?? undefined,
+      /** Skip Mesh `resolveScriptRef` — discovery only needs inline datum + amounts. */
+      scriptRef: undefined,
+      scriptHash: item.reference_script_hash ?? undefined,
+    },
+  };
+}
+
+/**
+ * Paginated Blockfrost `GET /addresses/{addr}/utxos` (same base as Mesh `YaciProvider`).
+ * Mesh `fetchAddressUTxOs` returns `[]` on **any** mapping error (e.g. one UTxO with a bad script ref),
+ * which hides other valid lock outputs at the bridge script.
+ */
+export async function fetchAddressUtxosBlockfrostDirect(
+  blockfrostApiBase: string,
+  bech32: string,
+): Promise<UTxO[]> {
+  const base = blockfrostApiBase.trim().replace(/\/+$/u, '');
+  const enc = encodeURIComponent(bech32.trim());
+  const out: UTxO[] = [];
+  for (let page = 1; page < 10_000; page++) {
+    const r = await fetch(`${base}/addresses/${enc}/utxos?page=${page}`, yaciFetchInit);
+    if (!r.ok) {
+      const detail = await readYaciErrorBody(r);
+      throw new Error(`Yaci Store UTxOs: HTTP ${r.status}${detail ? ` — ${detail}` : ''}`);
+    }
+    const j = (await r.json()) as unknown;
+    if (!Array.isArray(j)) throw new Error('Yaci Store: unexpected UTxO response');
+    if (j.length === 0) break;
+    for (const raw of j as BfAddressUtxo[]) {
+      try {
+        out.push(bfAddressUtxoToMeshUtxo(raw));
+      } catch {
+        /* ignore malformed row; do not drop the whole page */
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Blockfrost `GET /txs/{hash}/utxos` — maps `outputs` the same way as address UTxOs.
+ * Use when Mesh `fetchUTxOs` fails or returns empty due to a single bad output in `Promise.all`.
+ */
+export async function fetchTxUtxosBlockfrostDirect(
+  blockfrostApiBase: string,
+  txHash: string,
+): Promise<UTxO[]> {
+  const base = blockfrostApiBase.trim().replace(/\/+$/u, '');
+  const h = txHash.replace(/^0x/i, '').trim().toLowerCase();
+  const r = await fetch(`${base}/txs/${h}/utxos`, yaciFetchInit);
+  if (!r.ok) {
+    const detail = await readYaciErrorBody(r);
+    throw new Error(`Yaci Store tx UTxOs: HTTP ${r.status}${detail ? ` — ${detail}` : ''}`);
+  }
+  const data = (await r.json()) as { outputs?: BfAddressUtxo[] };
+  const outputs = data.outputs ?? [];
+  const out: UTxO[] = [];
+  for (const raw of outputs) {
+    try {
+      out.push(bfAddressUtxoToMeshUtxo(raw));
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
 }
 
 export function formatNativeUnits(amount: bigint, decimals: number): string {

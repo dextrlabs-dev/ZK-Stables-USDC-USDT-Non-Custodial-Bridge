@@ -16,31 +16,57 @@ export type LockDatumParams = {
   bridgeOperatorVkeyHashHex56: string | null;
 };
 
+/** Mesh `Data` uses `alternative`; `deserializeDatum` / CSL `parseDatumCbor` returns JSON Plutus (`constructor`, `bytes`, `int`). */
+function readHexBytesField(field: unknown): string {
+  if (typeof field === 'string') return field.replace(/^0x/i, '').trim().toLowerCase();
+  if (field && typeof field === 'object' && 'bytes' in field) {
+    return String((field as { bytes: string }).bytes).toLowerCase();
+  }
+  throw new Error('Expected hex string or { bytes } Plutus field');
+}
+
+function readBigIntField(field: unknown): bigint {
+  if (typeof field === 'bigint') return field;
+  if (typeof field === 'number') {
+    if (!Number.isFinite(field)) throw new Error('Plutus integer field is not a finite number');
+    return BigInt(Math.trunc(field));
+  }
+  if (field && typeof field === 'object' && 'int' in field) {
+    return readBigIntField((field as { int: unknown }).int);
+  }
+  const t = String(field).trim().replace(/,/g, '');
+  if (/^\d+$/u.test(t)) return BigInt(t);
+  const dot = t.indexOf('.');
+  if (dot > 0 && /^\d+$/.test(t.slice(0, dot))) return BigInt(t.slice(0, dot));
+  return BigInt(t);
+}
+
+function parseBridgeOperatorOption(opField: unknown): string | null {
+  const o = opField as { alternative?: number; constructor?: number; fields?: unknown[] };
+  const tag = o.alternative ?? o.constructor;
+  const inner = o.fields ?? [];
+  if (tag === 1 && inner.length === 0) return null;
+  if (tag === 0 && inner.length === 1) return readHexBytesField(inner[0]);
+  throw new Error('Unexpected bridge_operator option in LockDatum');
+}
+
 export function parseLockDatumFromMeshData(d: Data): LockDatumParams {
-  const root = d as unknown as { alternative: number; fields: Data[] };
+  const root = d as unknown as { fields?: Data[] };
   const f = root.fields;
   if (!Array.isArray(f) || f.length < 10) {
     throw new Error('Unexpected LockDatum shape from chain');
   }
-  const opField = f[9] as unknown as { alternative: number; fields: Data[] };
-  let bridgeOperatorVkeyHashHex56: string | null = null;
-  if (opField.alternative === 0 && opField.fields?.length === 1) {
-    bridgeOperatorVkeyHashHex56 = String(opField.fields[0]);
-  } else if (opField.alternative === 1) {
-    bridgeOperatorVkeyHashHex56 = null;
-  } else {
-    throw new Error('Unexpected bridge_operator option in LockDatum');
-  }
+  const bridgeOperatorVkeyHashHex56 = parseBridgeOperatorOption(f[9]);
   return {
-    depositorVkeyHashHex56: String(f[0]),
-    recipientVkeyHashHex56: String(f[1]),
-    policyIdHex: String(f[2]),
-    assetNameHex: String(f[3]),
-    amount: BigInt(String(f[4])),
-    lockNonce: BigInt(String(f[5])),
-    recipientCommitmentHex: String(f[6]),
-    sourceChainId: BigInt(String(f[7])),
-    destinationChainId: BigInt(String(f[8])),
+    depositorVkeyHashHex56: readHexBytesField(f[0]),
+    recipientVkeyHashHex56: readHexBytesField(f[1]),
+    policyIdHex: readHexBytesField(f[2]),
+    assetNameHex: readHexBytesField(f[3]),
+    amount: readBigIntField(f[4]),
+    lockNonce: readBigIntField(f[5]),
+    recipientCommitmentHex: readHexBytesField(f[6]),
+    sourceChainId: readBigIntField(f[7]),
+    destinationChainId: readBigIntField(f[8]),
     bridgeOperatorVkeyHashHex56,
   };
 }

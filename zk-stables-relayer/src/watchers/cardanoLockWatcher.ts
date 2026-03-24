@@ -7,6 +7,8 @@ import {
 } from '../adapters/cardanoBlockfrost.js';
 import {
   mergeRelayerBridgeIntoConnected,
+  relayerBridgeEvmRecipient,
+  relayerBridgeCardanoRecipient,
   relayerBridgeMidnightRecipient,
 } from '../config/bridgeRecipients.js';
 import { enqueueLockIntent } from '../pipeline/runJob.js';
@@ -49,8 +51,14 @@ export async function runCardanoLockWatcher(logger: Logger): Promise<void> {
   const destChain = process.env.RELAYER_CARDANO_DEST_CHAIN ?? 'midnight';
   const asset = (process.env.RELAYER_CARDANO_DEFAULT_ASSET ?? 'USDC') as 'USDC' | 'USDT';
   const assetKind = Number(process.env.RELAYER_CARDANO_ASSET_KIND ?? 0);
-  const recipient =
-    process.env.RELAYER_CARDANO_RECIPIENT_STUB?.trim() || relayerBridgeMidnightRecipient() || '';
+  const recipient = (() => {
+    const stub = process.env.RELAYER_CARDANO_RECIPIENT_STUB?.trim();
+    if (stub) return stub;
+    const dest = destChain.toLowerCase();
+    if (dest.includes('evm')) return relayerBridgeEvmRecipient() ?? '';
+    if (dest.includes('cardano')) return relayerBridgeCardanoRecipient() ?? '';
+    return relayerBridgeMidnightRecipient() ?? '';
+  })();
 
   const tick = async () => {
     try {

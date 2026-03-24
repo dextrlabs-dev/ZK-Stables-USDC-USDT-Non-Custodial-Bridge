@@ -25,6 +25,17 @@ export async function validateCardanoBurnIntentLockDatum(
     return { ok: true };
   }
 
+  const bcRaw = (intent.burnCommitmentHex ?? '').replace(/^0x/i, '').trim();
+  const burnFallbackOn =
+    (process.env.RELAYER_EVM_CROSS_CHAIN_UNLOCK_FALLBACK_NONCE ?? 'proof_digest').trim().toLowerCase() !== 'off';
+  if (!bcRaw && burnFallbackOn) {
+    logger.warn(
+      { txHash: src.txHash, outputIndex: src.outputIndex },
+      'Cardano BURN: burnCommitmentHex empty — skipping lock datum recipient_commitment match (EVM pool nonce from proof digest)',
+    );
+    return { ok: true };
+  }
+
   let expectedBc: string;
   try {
     expectedBc = normalizeBurnCommitmentHex64(intent.burnCommitmentHex);

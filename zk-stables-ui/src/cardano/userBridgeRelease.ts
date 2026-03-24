@@ -1,10 +1,12 @@
-import { BrowserWallet, MeshTxBuilder, deserializeAddress, deserializeDatum } from '@meshsdk/core';
+import { MeshTxBuilder, deserializeAddress, deserializeDatum } from '@meshsdk/core';
 import type { Data, IEvaluator, IFetcher, UTxO } from '@meshsdk/common';
 import { mConStr1 } from '@meshsdk/common';
 import { fetchCardanoBridgeMetadata } from './bridgeMetadata.js';
 import { parseLockDatumFromMeshData, normalizeDatumRecipientCommitment } from './lockDatumParse.js';
 import { createBrowserCardanoIndexer, type CardanoIndexer } from './meshCardanoIndexer.js';
 import { findWalletBech32ForPaymentKeyHash } from './walletPaymentAddresses.js';
+import { resolveBridgeSigningWallet } from './resolveBridgeSigningWallet.js';
+import { fetchUTxOsWithRetry } from './fetchUTxOsWithRetry.js';
 
 const redeemerBridgeRelease: Data = mConStr1([]);
 
@@ -12,7 +14,12 @@ export type { CardanoBridgeMetadata } from './bridgeMetadata.js';
 export { fetchCardanoBridgeMetadata } from './bridgeMetadata.js';
 
 async function fetchLockUtxo(fetcher: IFetcher, txHash: string, outputIndex: number): Promise<UTxO> {
-  const utxos = await fetcher.fetchUTxOs(txHash, outputIndex);
+  const utxos = await fetchUTxOsWithRetry(
+    fetcher,
+    txHash,
+    outputIndex,
+    `BridgeRelease (lock ${txHash.replace(/^0x/i, '').trim().toLowerCase()}#${outputIndex})`,
+  );
   const u = utxos.find((x) => x.input.outputIndex === outputIndex) ?? utxos[0];
   if (!u) throw new Error(`No UTxO for ${txHash}#${outputIndex}`);
   return u;
@@ -24,6 +31,7 @@ async function fetchLockUtxo(fetcher: IFetcher, txHash: string, outputIndex: num
  */
 export async function userWalletBridgeReleaseLockUtxo(opts: {
   cip30WalletKey: string;
+  useDemoMnemonicWallet?: boolean;
   relayerBaseUrl: string;
   lockTxHash: string;
   lockOutputIndex: number;
@@ -40,7 +48,10 @@ export async function userWalletBridgeReleaseLockUtxo(opts: {
     );
   }
 
-  const wallet = await BrowserWallet.enable(opts.cip30WalletKey);
+  const wallet = await resolveBridgeSigningWallet({
+    cip30WalletKey: opts.cip30WalletKey,
+    useDemoMnemonicWallet: Boolean(opts.useDemoMnemonicWallet),
+  });
 
   const scriptUtxo = await fetchLockUtxo(fetcher, opts.lockTxHash.trim(), opts.lockOutputIndex);
   const rawDatum = scriptUtxo.output.plutusData;

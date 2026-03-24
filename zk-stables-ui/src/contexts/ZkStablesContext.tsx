@@ -2,6 +2,7 @@ import React, {
   type PropsWithChildren,
   createContext,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -16,12 +17,11 @@ import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-p
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import type { Logger } from 'pino';
-import { BehaviorSubject, filter, firstValueFrom, interval, map, take, throwError, timeout } from 'rxjs';
-import * as ZkStables from '@contract/zk-stables';
-import { zkStablesWitnesses, type ZkStablesPrivateState } from '@contract/witnesses-zk-stables';
-import { zkStablesPrivateStateId, AssetKind } from '../constants/zk-stables.js';
+import { BehaviorSubject, type Subscription, filter, firstValueFrom, interval, map, take, throwError, timeout } from 'rxjs';
+import * as ZkStablesRegistry from '@contract/zk-stables-registry';
+import { zkStablesRegistryWitnesses, type ZkStablesRegistryPrivateState } from '@contract/witnesses-zk-stables-registry';
+import { zkStablesRegistryPrivateStateId, AssetKind } from '../constants/zk-stables.js';
 import type { PublicDataProvider } from '@midnight-ntwrk/midnight-js-types';
-import { holderLedgerPublicKey } from '../utils/holder-key.js';
 import { hexToBytes32, uint8ArrayToHex } from '../utils/hex.js';
 import { userAddressStructFromInput } from '../utils/userAddress.js';
 import { createInMemoryPrivateStateProvider } from '../utils/inMemoryPrivateStateProvider.js';
@@ -58,18 +58,37 @@ export type BridgeDeployment =
   | { readonly status: 'deployed'; readonly contractAddress: ContractAddress }
   | { readonly status: 'failed'; readonly error: Error };
 
-export type LedgerView = {
-  state: number;
-  stateLabel: string;
+/** Per-deposit entry from the registry ledger maps. */
+export type RegistryDepositEntry = {
+  depositCommitmentHex: string;
+  status: number;
+  statusLabel: string;
   assetKind: number;
   amount: bigint;
   sourceChainId: bigint;
   destChainId: bigint;
   mintedUnshielded: boolean;
   unshieldedReleased: boolean;
-  depositCommitmentHex: string;
   recipientCommitmentHex: string;
 };
+
+export type LedgerView = {
+  /** Registry bridgeOperator public key hex. */
+  bridgeOperatorHex: string;
+  /** Per-deposit entries from the registry maps. */
+  deposits: RegistryDepositEntry[];
+  /** Total registered deposits. */
+  depositCount: number;
+};
+
+function registryStatusLabel(status: number): string {
+  switch (status) {
+    case 1: return 'Active';
+    case 2: return 'ExitPending';
+    case 3: return 'Burned';
+    default: return `Unknown(${status})`;
+  }
+}
 
 export type TxLogEntry = {
   label: string;
@@ -89,6 +108,7 @@ export type ZkStablesDeployParams = {
 };
 
 type ZkCircuitId =
+  | 'registerDeposit'
   | 'proveHolder'
   | 'mintWrappedUnshielded'
   | 'initiateBurn'
@@ -120,18 +140,6 @@ function sameHostWsUrl(port: number, path = ''): string {
   return `${proto}//${host}:${port}${path}`;
 }
 
-function bridgeStateLabel(state: number): string {
-  switch (state) {
-    case 0:
-      return 'Active';
-    case 1:
-      return 'ExitPending';
-    case 2:
-      return 'Burned';
-    default:
-      return `Unknown(${state})`;
-  }
-}
 
 /** Midnight dApp connector name (e.g. Lace) when connected. */
 export type ZkStablesContextValue = {
@@ -163,19 +171,25 @@ export type ZkStablesContextValue = {
   /** Dev-only: connect without Lace using a 32-byte seed hash (local undeployed network). */
   connectDevSeedWallet: (seedHashHex: string) => Promise<void>;
   connectAndDeploy: () => Promise<void>;
-  connectAndJoin: () => Promise<void>;
+  connectAndJoin: (addressOverride?: string, privateStateOverride?: { operatorSkHex: string; holderSkHex: string }) => Promise<void>;
   refreshLedger: () => Promise<void>;
-  proveHolder: () => Promise<void>;
-  mintWrappedUnshielded: () => Promise<void>;
-  /** Optional args bypass `recipientCommHex` / `burnDestChain` state (e.g. Bridge redeem wizard). */
-  initiateBurn: (override?: { recipientCommHex64?: string; destChain?: string }) => Promise<void>;
-  sendWrappedUnshieldedToUser: () => Promise<void>;
-  finalizeBurn: () => Promise<void>;
+  /** Registry: proveHolder(dep). */
+  proveHolder: (dep?: Uint8Array) => Promise<void>;
+  /** Registry: mintWrappedUnshielded(dep). */
+  mintWrappedUnshielded: (dep?: Uint8Array) => Promise<void>;
+  /** Registry: initiateBurn(dep, destChain, recipientComm). */
+  initiateBurn: (override?: { depositCommitment?: Uint8Array; recipientCommHex64?: string; destChain?: string }) => Promise<void>;
+  /** Registry: sendWrappedUnshieldedToUser(dep, userAddr). */
+  sendWrappedUnshieldedToUser: (dep?: Uint8Array) => Promise<void>;
+  /** Registry: finalizeBurn(dep). */
+  finalizeBurn: (dep?: Uint8Array) => Promise<void>;
   canProveHolder: boolean;
   canMint: boolean;
   canInitiateBurn: boolean;
   canSendWrapped: boolean;
   canFinalizeBurn: boolean;
+  /** Wallet unshielded token balances: Record<RawTokenType, bigint> from WalletFacade.state(). */
+  unshieldedBalances: Record<string, bigint>;
   /** After a successful `initiateBurn`, use for relayer `BURN` intent (`burnCommitmentHex` + `source.midnight`). */
   lastMidnightBurnAnchor: {
     txId: string;
@@ -193,7 +207,7 @@ export type ZkStablesProviderProps = PropsWithChildren<{ logger: Logger }>;
 
 export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, children }) => {
   const privateStateProvider = useMemo(
-    () => createInMemoryPrivateStateProvider<typeof zkStablesPrivateStateId, ZkStablesPrivateState>(),
+    () => createInMemoryPrivateStateProvider<typeof zkStablesRegistryPrivateStateId, ZkStablesRegistryPrivateState>(),
     [],
   );
 
@@ -210,6 +224,8 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
   const [lastMidnightBurnAnchor, setLastMidnightBurnAnchor] = useState<ZkStablesContextValue['lastMidnightBurnAnchor']>(
     null,
   );
+  const [unshieldedBalances, setUnshieldedBalances] = useState<Record<string, bigint>>({});
+  const walletStateSub = useRef<Subscription | null>(null);
 
   const clearLastMidnightBurnAnchor = useCallback(() => setLastMidnightBurnAnchor(null), []);
 
@@ -241,8 +257,8 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
 
   const compiledContract = useMemo(
     () =>
-      CompiledContract.make('zk-stables', ZkStables.Contract as never).pipe(
-        CompiledContract.withWitnesses(zkStablesWitnesses as never),
+      CompiledContract.make('zk-stables-registry', ZkStablesRegistry.Contract as never).pipe(
+        CompiledContract.withWitnesses(zkStablesRegistryWitnesses as never),
         CompiledContract.withCompiledFileAssets(zkArtifactsBaseUrl()),
       ) as any,
     [],
@@ -261,7 +277,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     ]);
   }, []);
 
-  const buildPrivateState = useCallback((): ZkStablesPrivateState => {
+  const buildPrivateState = useCallback((): ZkStablesRegistryPrivateState => {
     return {
       operatorSecretKey: hexToBytes32(deployParams.operatorSkHex),
       holderSecretKey: hexToBytes32(deployParams.holderSkHex),
@@ -366,6 +382,14 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
           formatShieldedAddressForDisplay(NETWORK_ID, state.shielded?.address) ?? null,
         );
         setNetworkId('undeployed');
+
+        walletStateSub.current?.unsubscribe();
+        walletStateSub.current = ctx.wallet.state().subscribe((s: any) => {
+          try {
+            const bals: Record<string, bigint> = s?.unshielded?.balances ?? {};
+            setUnshieldedBalances(bals);
+          } catch { /* ignore */ }
+        });
 
         const zkConfigProvider = new FetchZkConfigProvider<ZkCircuitId>(zkArtifactsBaseUrl(), fetch.bind(window));
         const proofProvider = httpClientProofProvider(sameHostUrl(MIDNIGHT_PROOF_SERVER_PORT), zkConfigProvider);
@@ -556,6 +580,8 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
   }, [initializeProviders, logger]);
 
   const disconnectLaceWallet = useCallback(() => {
+    walletStateSub.current?.unsubscribe();
+    walletStateSub.current = null;
     providersCacheRef.current = null;
     walletRef.current = null;
     devWalletRef.current = null;
@@ -567,6 +593,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     setUnshieldedAddress(null);
     setContractAddress(null);
     setLedger(null);
+    setUnshieldedBalances({});
     setLastMidnightBurnAnchor(null);
     setFlowMessage(undefined);
     deploymentSubject.next({ status: 'idle' });
@@ -602,18 +629,34 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
         setLedger(null);
         return;
       }
-      const L = ZkStables.ledger(cs.data);
+      const L = ZkStablesRegistry.ledger(cs.data);
+      const deposits: RegistryDepositEntry[] = [];
+      for (const [depKey, status] of L.depositStatus) {
+        const depHex = uint8ArrayToHex(depKey);
+        const assetKind = L.depositAssetKind.member(depKey) ? L.depositAssetKind.lookup(depKey) : 0;
+        const amount = L.depositAmount.member(depKey) ? L.depositAmount.lookup(depKey) : 0n;
+        const sourceChainId = L.depositSourceChain.member(depKey) ? L.depositSourceChain.lookup(depKey) : 0n;
+        const destChainId = L.depositDestChain.member(depKey) ? L.depositDestChain.lookup(depKey) : 0n;
+        const mintedUnshielded = L.depositMintedUnshielded.member(depKey) ? Number(L.depositMintedUnshielded.lookup(depKey)) === 1 : false;
+        const unshieldedReleased = L.depositUnshieldedReleased.member(depKey) ? Number(L.depositUnshieldedReleased.lookup(depKey)) === 1 : false;
+        const recipientCommitmentHex = L.depositRecipientComm.member(depKey) ? uint8ArrayToHex(L.depositRecipientComm.lookup(depKey)) : '00'.repeat(32);
+        deposits.push({
+          depositCommitmentHex: depHex,
+          status: Number(status),
+          statusLabel: registryStatusLabel(Number(status)),
+          assetKind,
+          amount,
+          sourceChainId,
+          destChainId,
+          mintedUnshielded,
+          unshieldedReleased,
+          recipientCommitmentHex,
+        });
+      }
       setLedger({
-        state: L.state,
-        stateLabel: bridgeStateLabel(L.state),
-        assetKind: L.assetKind,
-        amount: L.amount,
-        sourceChainId: L.sourceChainId,
-        destChainId: L.destChainId,
-        mintedUnshielded: L.mintedUnshielded,
-        unshieldedReleased: L.unshieldedReleased,
-        depositCommitmentHex: uint8ArrayToHex(L.depositCommitment),
-        recipientCommitmentHex: uint8ArrayToHex(L.recipientCommitment),
+        bridgeOperatorHex: uint8ArrayToHex(L.bridgeOperator),
+        deposits,
+        depositCount: deposits.length,
       });
     } catch (e) {
       logger.warn({ e }, 'refreshLedger failed');
@@ -630,21 +673,16 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       const providers = await initializeProviders();
       const ps = buildPrivateState();
 
-      const depositCommitment = hexToBytes32(deployParams.depositCommitmentHex);
-      const ownerPk = holderLedgerPublicKey(ps.holderSecretKey!);
-      const sourceChainId = BigInt(deployParams.sourceChainId || '0');
-      const amount = BigInt(deployParams.amount || '0');
-
-      setFlowMessage('Deploying zk-stables (proving may take several minutes)…');
-      logger.info('deployContract starting');
+      setFlowMessage('Deploying zk-stables-registry (proving may take several minutes)…');
+      logger.info('deployContract (registry) starting');
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const deployed = await deployContract(providers as any, {
         compiledContract,
-        privateStateId: zkStablesPrivateStateId,
+        privateStateId: zkStablesRegistryPrivateStateId,
         initialPrivateState: ps,
-        args: [depositCommitment, deployParams.assetKind, sourceChainId, amount, new Uint8Array(ownerPk)],
-      });
+        args: [],
+      } as any);
 
       const addr = deployed.deployTxData.public.contractAddress;
       deployedRef.current = deployed;
@@ -672,18 +710,14 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     appendTxLog,
     buildPrivateState,
     compiledContract,
-    deployParams.amount,
-    deployParams.assetKind,
-    deployParams.depositCommitmentHex,
-    deployParams.sourceChainId,
     deploymentSubject,
     initializeProviders,
     logger,
     refreshLedger,
   ]);
 
-  const connectAndJoin = useCallback(async () => {
-    const addr = joinAddress.trim() as ContractAddress;
+  const connectAndJoin = useCallback(async (addressOverride?: string, privateStateOverride?: { operatorSkHex: string; holderSkHex: string }) => {
+    const addr = (addressOverride?.trim() || joinAddress.trim()) as ContractAddress;
     if (!addr) {
       deploymentSubject.next({
         status: 'failed',
@@ -698,14 +732,16 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
         setFlowMessage('Connecting wallet…');
       }
       const providers = await initializeProviders();
-      const ps = buildPrivateState();
+      const ps = privateStateOverride
+        ? { operatorSecretKey: hexToBytes32(privateStateOverride.operatorSkHex), holderSecretKey: hexToBytes32(privateStateOverride.holderSkHex) }
+        : buildPrivateState();
       setFlowMessage('Joining contract…');
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const joined = await findDeployedContract(providers as any, {
         contractAddress: addr,
         compiledContract,
-        privateStateId: zkStablesPrivateStateId,
+        privateStateId: zkStablesRegistryPrivateStateId,
         initialPrivateState: ps,
       });
 
@@ -746,13 +782,14 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     return d;
   }, []);
 
-  const proveHolder = useCallback(async () => {
+  const proveHolder = useCallback(async (dep?: Uint8Array) => {
     const d = requireDeployed();
+    if (!dep) throw new Error('proveHolder requires a deposit commitment');
     setFlowMessage(
       'proveHolder: prove → balance → submit → waiting for indexer (multi-step; do not refresh)…',
     );
     try {
-      const r = await d.callTx.proveHolder();
+      const r = await d.callTx.proveHolder(dep);
       appendTxLog('proveHolder', r.public);
       await refreshLedger();
     } finally {
@@ -760,11 +797,12 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     }
   }, [appendTxLog, refreshLedger, requireDeployed]);
 
-  const mintWrappedUnshielded = useCallback(async () => {
+  const mintWrappedUnshielded = useCallback(async (dep?: Uint8Array) => {
     const d = requireDeployed();
+    if (!dep) throw new Error('mintWrappedUnshielded requires a deposit commitment');
     setFlowMessage('mintWrappedUnshielded: prove → submit → waiting for indexer…');
     try {
-      const r = await d.callTx.mintWrappedUnshielded();
+      const r = await d.callTx.mintWrappedUnshielded(dep);
       appendTxLog('mintWrappedUnshielded', r.public);
       await refreshLedger();
     } finally {
@@ -773,8 +811,10 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
   }, [appendTxLog, refreshLedger, requireDeployed]);
 
   const initiateBurn = useCallback(
-    async (override?: { recipientCommHex64?: string; destChain?: string }) => {
+    async (override?: { depositCommitment?: Uint8Array; recipientCommHex64?: string; destChain?: string }) => {
       const d = requireDeployed();
+      const dep = override?.depositCommitment;
+      if (!dep) throw new Error('initiateBurn requires a deposit commitment');
       const destStr = (override?.destChain ?? burnDestChain) || '0';
       const commBare = (override?.recipientCommHex64 ?? recipientCommHex).replace(/^0x/i, '').trim().toLowerCase();
       if (commBare.length !== 64 || !/^[0-9a-f]+$/u.test(commBare)) {
@@ -784,7 +824,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       const comm = hexToBytes32(commBare);
       setFlowMessage('initiateBurn: prove → submit → waiting for indexer…');
       try {
-        const r = await d.callTx.initiateBurn(dest, comm);
+        const r = await d.callTx.initiateBurn(dep, dest, comm);
         appendTxLog('initiateBurn', r.public);
         setLastMidnightBurnAnchor({
           txId: String(r.public.txId),
@@ -801,8 +841,9 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     [appendTxLog, burnDestChain, contractAddress, recipientCommHex, refreshLedger, requireDeployed],
   );
 
-  const sendWrappedUnshieldedToUser = useCallback(async () => {
+  const sendWrappedUnshieldedToUser = useCallback(async (dep?: Uint8Array) => {
     const d = requireDeployed();
+    if (!dep) throw new Error('sendWrappedUnshieldedToUser requires a deposit commitment');
     let nid: string = NETWORK_ID;
     try {
       const w = walletRef.current;
@@ -816,7 +857,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     const userAddr = userAddressStructFromInput(sendToAddressInput, nid);
     setFlowMessage('sendWrappedUnshieldedToUser: prove → submit → waiting for indexer…');
     try {
-      const r = await d.callTx.sendWrappedUnshieldedToUser(userAddr);
+      const r = await d.callTx.sendWrappedUnshieldedToUser(dep, userAddr);
       appendTxLog('sendWrappedUnshieldedToUser', r.public);
       await refreshLedger();
     } finally {
@@ -824,11 +865,12 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     }
   }, [appendTxLog, refreshLedger, requireDeployed, sendToAddressInput]);
 
-  const finalizeBurn = useCallback(async () => {
+  const finalizeBurn = useCallback(async (dep?: Uint8Array) => {
     const d = requireDeployed();
+    if (!dep) throw new Error('finalizeBurn requires a deposit commitment');
     setFlowMessage('finalizeBurn: prove → submit → waiting for indexer…');
     try {
-      const r = await d.callTx.finalizeBurn();
+      const r = await d.callTx.finalizeBurn(dep);
       appendTxLog('finalizeBurn', r.public);
       await refreshLedger();
     } finally {
@@ -836,15 +878,13 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     }
   }, [appendTxLog, refreshLedger, requireDeployed]);
 
-  const canProveHolder = ledger !== null && ledger.state !== 2;
-  const canMint = ledger !== null && ledger.state === 0 && !ledger.mintedUnshielded;
-  const canInitiateBurn = ledger !== null && ledger.state === 0;
-  const canSendWrapped =
-    ledger !== null && ledger.state === 1 && ledger.mintedUnshielded && !ledger.unshieldedReleased;
-  const canFinalizeBurn =
-    ledger !== null &&
-    ledger.state === 1 &&
-    (!ledger.mintedUnshielded || ledger.unshieldedReleased);
+  useEffect(() => () => { walletStateSub.current?.unsubscribe(); }, []);
+
+  const canProveHolder = ledger !== null && ledger.deposits.some((d) => d.status === 1);
+  const canMint = ledger !== null && ledger.deposits.some((d) => d.status === 1 && !d.mintedUnshielded);
+  const canInitiateBurn = ledger !== null && ledger.deposits.some((d) => d.status === 1);
+  const canSendWrapped = ledger !== null && ledger.deposits.some((d) => d.status === 2 && d.mintedUnshielded && !d.unshieldedReleased);
+  const canFinalizeBurn = ledger !== null && ledger.deposits.some((d) => d.status === 2 && d.unshieldedReleased);
 
   const value = useMemo<ZkStablesContextValue>(
     () => ({
@@ -884,6 +924,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       canInitiateBurn,
       canSendWrapped,
       canFinalizeBurn,
+      unshieldedBalances,
       lastMidnightBurnAnchor,
       clearLastMidnightBurnAnchor,
     }),
@@ -919,6 +960,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       sendToAddressInput,
       sendWrappedUnshieldedToUser,
       txLog,
+      unshieldedBalances,
       walletAddress,
       unshieldedAddress,
     ],

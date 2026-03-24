@@ -28,10 +28,6 @@ export const DeployJoinPanel: React.FC = () => {
     setJoinAddress,
     connectAndDeploy,
     connectAndJoin,
-    proveHolder,
-    mintWrappedUnshielded,
-    initiateBurn,
-    finalizeBurn,
   } = useZkStables();
 
   const [deployment, setDeployment] = useState<BridgeDeployment>({ status: 'idle' });
@@ -75,15 +71,10 @@ export const DeployJoinPanel: React.FC = () => {
       await deriveFromGenesis();
       // Deploy (requires Lace already connected; connectAndDeploy will error with guidance if not).
       await connectAndDeploy();
-      // Run a minimal “all operations” path on the deployed contract.
-      await proveHolder();
-      await mintWrappedUnshielded();
-      await initiateBurn();
-      await finalizeBurn();
     } catch (e) {
       setGenesisErr(e instanceof Error ? e.message : String(e));
     }
-  }, [connectAndDeploy, deriveFromGenesis, finalizeBurn, initiateBurn, mintWrappedUnshielded, proveHolder]);
+  }, [connectAndDeploy, deriveFromGenesis]);
 
   return (
     <Stack id="panel-midnight-deploy" spacing={2}>

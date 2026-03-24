@@ -22,7 +22,7 @@ import {
   demoWalletsEnabled,
 } from '../demo/constants.js';
 
-/** One-click test identities: EVM mock (Anvil keys) + Cardano demo overlay; Midnight still uses Lace. */
+/** One-click test identities: EVM mock (Anvil keys) + Cardano demo overlay; Midnight uses Lace or dev seed. */
 export const DemoWalletsPanel: React.FC = () => {
   const enabled = demoWalletsEnabled();
   const { address, chain, isConnected, status, connector } = useConnection();
@@ -62,8 +62,9 @@ export const DemoWalletsPanel: React.FC = () => {
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           One-click load of <strong>EVM</strong> test accounts (wagmi <code>mock</code> connector — public Anvil/Hardhat keys)
-          and a fake <strong>Cardano</strong> row for UI testing. <strong>Midnight</strong> still needs Lace or dev seed; the
-          table shows a sample shielded address for local scripts when Lace is not connected.
+          and a <strong>Cardano</strong> demo row. With <code>VITE_DEMO_CARDANO_WALLET_MNEMONIC</code>, the app also loads in-app
+          Mesh signing automatically (production builds included). <strong>Midnight</strong> still
+          needs Lace or dev seed; the table shows a sample shielded address when Lace is not connected.
         </Typography>
         <Alert severity="warning" sx={{ mb: 2 }}>
           These EVM keys are public — never use them for real money or mainnet.

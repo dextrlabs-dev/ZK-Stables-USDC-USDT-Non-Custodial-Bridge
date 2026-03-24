@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import inject from '@rollup/plugin-inject';
-import { defineConfig } from 'vite';
+import { defineConfig, type ProxyOptions } from 'vite';
 import react from '@vitejs/plugin-react';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
@@ -13,12 +13,33 @@ const contractRoot = path.resolve(__dirname, '../contract/dist');
 const rootNm = path.resolve(__dirname, '../node_modules');
 const midnight = (pkg: string) => path.join(rootNm, '@midnight-ntwrk', pkg);
 
-export default defineConfig(({ mode }) => ({
+/** Same-origin proxy for Blockfrost-compatible Yaci Store (dev + `vite preview`). */
+const yaciStoreProxy: Record<string, ProxyOptions> = {
+  '/yaci-store': {
+    target: 'http://127.0.0.1:8080',
+    changeOrigin: true,
+    rewrite: (p) => p.replace(/^\/yaci-store/u, '/api/v1'),
+    configure: (proxy) => {
+      proxy.on('error', (err: NodeJS.ErrnoException, _req: IncomingMessage, res: ServerResponse | unknown) => {
+        const r = res as ServerResponse;
+        if (r?.writeHead && !r.headersSent) {
+          r.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+          r.end(
+            `Yaci Store unreachable (${err.code ?? err.message ?? 'ECONNREFUSED'}). Start Yaci DevKit / Store on port 8080 (see repo docs/CARDANO_LOCAL_YACI.md).`,
+          );
+        }
+      });
+    },
+  },
+};
+
+export default defineConfig(({ mode, command }) => ({
   esbuild: {
     target: 'es2022',
   },
   define: {
-    'process.env.NODE_ENV': JSON.stringify(mode === 'production' ? 'production' : 'development'),
+    // `vite build --mode development` loads `.env.development` for local preview; still ship a production React build.
+    'process.env.NODE_ENV': JSON.stringify(command === 'build' ? 'production' : mode === 'production' ? 'production' : 'development'),
     global: 'globalThis',
   },
   plugins: [
@@ -44,12 +65,20 @@ export default defineConfig(({ mode }) => ({
         icons: [],
       },
       workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         // Ledger WASM + vendor chunk exceed Workbox default 2 MiB precache limit.
         maximumFileSizeToCacheInBytes: 32 * 1024 * 1024,
         globPatterns: ['**/*.{js,css,html,wasm,ico,svg,png,woff2,json}'],
         globIgnores: ['**/mockServiceWorker.js'],
         // Precache covers hashed bundles + WASM; this catches ZK files under /keys/ and /zkir/ with any extension.
         runtimeCaching: [
+          // Same-origin `/yaci-store` proxies to Yaci Store (dev/preview); never cache API responses (avoids stale 503).
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/yaci-store'),
+            handler: 'NetworkOnly',
+          },
           {
             urlPattern: ({ url }) =>
               url.pathname.startsWith('/keys/') || url.pathname.startsWith('/zkir/'),
@@ -106,6 +135,8 @@ export default defineConfig(({ mode }) => ({
       '@midnight-ntwrk/wallet-sdk-unshielded-wallet': midnight('wallet-sdk-unshielded-wallet'),
       '@contract/zk-stables': path.join(contractRoot, 'managed/zk-stables/contract/index.js'),
       '@contract/witnesses-zk-stables': path.join(contractRoot, 'witnesses-zk-stables.js'),
+      '@contract/zk-stables-registry': path.join(contractRoot, 'managed/zk-stables-registry/contract/index.js'),
+      '@contract/witnesses-zk-stables-registry': path.join(contractRoot, 'witnesses-registry.js'),
     },
   },
   optimizeDeps: {
@@ -161,23 +192,10 @@ export default defineConfig(({ mode }) => ({
       clientFiles: ['./index.html', './src/main.tsx', './src/globals.ts', './src/bootstrap.tsx', './src/App.tsx'],
     },
     // Browser → Yaci Store would hit CORS; same-origin `/yaci-store` proxies to Blockfrost-compatible API.
-    proxy: {
-      '/yaci-store': {
-        target: 'http://127.0.0.1:8080',
-        changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/yaci-store/u, '/api/v1'),
-        configure: (proxy) => {
-          proxy.on('error', (err: NodeJS.ErrnoException, _req: IncomingMessage, res: ServerResponse | unknown) => {
-            const r = res as ServerResponse;
-            if (r?.writeHead && !r.headersSent) {
-              r.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
-              r.end(
-                `Yaci Store unreachable (${err.code ?? err.message ?? 'ECONNREFUSED'}). Start Yaci DevKit / Store on port 8080 (see repo docs/CARDANO_LOCAL_YACI.md).`,
-              );
-            }
-          });
-        },
-      },
-    },
+    proxy: yaciStoreProxy,
+  },
+  // `vite preview` does not use `server`; `/yaci-store` must be proxied here too when using VITE_YACI_STORE_URL=/yaci-store.
+  preview: {
+    proxy: yaciStoreProxy,
   },
 }));

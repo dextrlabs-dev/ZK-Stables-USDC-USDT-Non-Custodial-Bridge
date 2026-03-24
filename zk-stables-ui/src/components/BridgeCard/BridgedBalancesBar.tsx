@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection } from 'wagmi';
 import type { Address } from 'viem';
 import {
@@ -11,12 +11,18 @@ import {
   fetchYaciAddressAda,
   fetchYaciAddressNativeAssetQuantity,
   formatNativeUnits,
-  isYaciStoreReachable,
   resolveYaciStoreBaseUrl,
 } from '../../lib/yaciAddressBalance.js';
 import { useZkStables } from '../../hooks/useZkStables.js';
 import type { DemoWalletsResponse } from '../../lib/relayerClient.js';
+import { defaultRelayerBaseUrl, fetchMidnightContract } from '../../lib/relayerClient.js';
 import { shortenAddress } from '../../utils/formatAddress.js';
+
+async function deriveHex32FromGenesis(seedHex: string, label: string): Promise<string> {
+  const input = `${label}:${seedHex.trim().replace(/^0x/, '').toLowerCase()}`;
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 function fmtBal(s: string | undefined): string {
   if (s === undefined) return '—';
@@ -34,7 +40,19 @@ function fmtLedgerAmount(n: bigint): string {
 }
 
 export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ demo }) => {
-  const { ledger, contractAddress, walletAddress, unshieldedAddress, refreshLedger } = useZkStables();
+  const {
+    ledger,
+    contractAddress,
+    walletAddress,
+    unshieldedAddress,
+    unshieldedBalances,
+    refreshLedger,
+    isConnected: midnightConnected,
+    isConnecting: midnightConnecting,
+    connectDevSeedWallet,
+    connectAndJoin,
+    setDeployParams,
+  } = useZkStables();
   const rpcUrl = import.meta.env.VITE_ETH_LOCALHOST_RPC_URL || 'http://127.0.0.1:8545';
   const usdc = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDC_ADDRESS);
   const usdt = parseEnvEthereumAddress(import.meta.env.VITE_DEMO_USDT_ADDRESS);
@@ -68,7 +86,10 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
   const [nativeWusdtDest, setNativeWusdtDest] = useState<string | undefined>();
   const [evmErr, setEvmErr] = useState<string | null>(null);
   const [adaErr, setAdaErr] = useState<string | null>(null);
+  const [midnightErr, setMidnightErr] = useState<string | null>(null);
+  const [midnightBusy, setMidnightBusy] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const midnightAutoConnectAttempted = useRef(false);
 
   const hasWrapped = Boolean(wusdc || wusdt);
   const hasUnderlying = Boolean(usdc || usdt);
@@ -168,39 +189,31 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
         clearCardanoBals();
         setAdaErr(null);
       } else {
-        const up = await isYaciStoreReachable(yaciBase);
-        if (!up) {
-          clearCardanoBals();
-          setAdaErr(
-            'Yaci Store not reachable (Vite often returns 503 when nothing listens on :8080). Start Yaci on port 8080, or clear VITE_YACI_STORE_URL to hide Cardano balances. See docs/CARDANO_LOCAL_YACI.md.',
-          );
-        } else {
-          try {
-            if (cardanoSource) {
-              const s = await fetchCardanoSide(cardanoSource);
-              setAdaSrcBal(s.ada);
-              setNativeWusdcSrc(s.wusdc);
-              setNativeWusdtSrc(s.wusdt);
-            } else {
-              setAdaSrcBal(undefined);
-              setNativeWusdcSrc(undefined);
-              setNativeWusdtSrc(undefined);
-            }
-            if (cardanoDest) {
-              const d = await fetchCardanoSide(cardanoDest);
-              setAdaDestBal(d.ada);
-              setNativeWusdcDest(d.wusdc);
-              setNativeWusdtDest(d.wusdt);
-            } else {
-              setAdaDestBal(undefined);
-              setNativeWusdcDest(undefined);
-              setNativeWusdtDest(undefined);
-            }
-            setAdaErr(null);
-          } catch (e) {
-            clearCardanoBals();
-            setAdaErr(e instanceof Error ? e.message : String(e));
+        try {
+          if (cardanoSource) {
+            const s = await fetchCardanoSide(cardanoSource);
+            setAdaSrcBal(s.ada);
+            setNativeWusdcSrc(s.wusdc);
+            setNativeWusdtSrc(s.wusdt);
+          } else {
+            setAdaSrcBal(undefined);
+            setNativeWusdcSrc(undefined);
+            setNativeWusdtSrc(undefined);
           }
+          if (cardanoDest) {
+            const d = await fetchCardanoSide(cardanoDest);
+            setAdaDestBal(d.ada);
+            setNativeWusdcDest(d.wusdc);
+            setNativeWusdtDest(d.wusdt);
+          } else {
+            setAdaDestBal(undefined);
+            setNativeWusdcDest(undefined);
+            setNativeWusdtDest(undefined);
+          }
+          setAdaErr(null);
+        } catch (e) {
+          clearCardanoBals();
+          setAdaErr(e instanceof Error ? e.message : String(e));
         }
       }
     } else {
@@ -244,8 +257,49 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
     void refreshLedger();
   }, [contractAddress, refreshKey, refreshLedger]);
 
+  const connectMidnight = useCallback(async () => {
+    setMidnightErr(null);
+    setMidnightBusy(true);
+    try {
+      const seedHash = (import.meta.env.VITE_GENESIS_SEED_HASH_HEX ?? '').trim();
+      if (!seedHash || seedHash.length !== 64) {
+        setMidnightErr('VITE_GENESIS_SEED_HASH_HEX not set');
+        return;
+      }
+      const [opSk, hlSk] = await Promise.all([
+        deriveHex32FromGenesis(seedHash, 'zkstables:operatorSk:v1'),
+        deriveHex32FromGenesis(seedHash, 'zkstables:holderSk:v1'),
+      ]);
+      setDeployParams((prev) => ({
+        ...prev,
+        operatorSkHex: opSk,
+        holderSkHex: hlSk,
+      }));
+      await connectDevSeedWallet(seedHash);
+      const relayer = defaultRelayerBaseUrl();
+      const mc = await fetchMidnightContract(relayer);
+      if (mc.contractAddress) {
+        await connectAndJoin(mc.contractAddress, { operatorSkHex: opSk, holderSkHex: hlSk });
+      } else {
+        setMidnightErr('Relayer has no Midnight contract deployed yet');
+      }
+    } catch (e) {
+      setMidnightErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMidnightBusy(false);
+    }
+  }, [connectDevSeedWallet, connectAndJoin, setDeployParams]);
+
+  useEffect(() => {
+    if (midnightConnected || midnightConnecting || midnightAutoConnectAttempted.current) return;
+    const seedHash = (import.meta.env.VITE_GENESIS_SEED_HASH_HEX ?? '').trim();
+    if (!seedHash || seedHash.length !== 64) return;
+    midnightAutoConnectAttempted.current = true;
+    void connectMidnight();
+  }, [midnightConnected, midnightConnecting, connectMidnight]);
+
   const evmSubtitle = useMemo(() => {
-    if (!account) return 'Connect EVM or load demo wallets';
+    if (!account) return 'Connect EVM wallet';
     return shortenAddress(account, { head: 10, tail: 8 });
   }, [account]);
 
@@ -261,33 +315,46 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
 
   const hasCardanoNativeCols = Boolean(cardWusdcUnit || cardWusdtUnit);
 
-  const midnightShieldedShort = useMemo(() => {
-    const w = walletAddress?.trim();
-    if (w) return shortenAddress(w, { head: 14, tail: 10 });
-    const ex = demo.midnight.shieldedExample?.trim();
-    if (ex) return shortenAddress(ex, { head: 14, tail: 10 });
-    return '—';
-  }, [walletAddress, demo.midnight.shieldedExample]);
+  const NATIVE_TOKEN_HEX = '00'.repeat(32);
 
-  const unshieldedShort = useMemo(() => {
-    const u = unshieldedAddress?.trim();
-    if (u) return shortenAddress(u, { head: 14, tail: 10 });
-    const ex = demo.midnight.unshieldedExample?.trim();
-    if (ex) return shortenAddress(ex, { head: 14, tail: 10 });
-    return '—';
-  }, [unshieldedAddress, demo.midnight.unshieldedExample]);
+  const midnightTokenEntries = useMemo(() => {
+    if (!midnightConnected || !unshieldedBalances) return [];
+    return Object.entries(unshieldedBalances)
+      .filter(([, v]) => v > 0n)
+      .map(([tokenType, amount]) => {
+        const isNative = tokenType === NATIVE_TOKEN_HEX || tokenType === '';
+        let label = 'zkUSDC';
+        if (isNative) {
+          label = 'tDUST';
+        } else if (ledger && ledger.deposits.length > 0) {
+          const hasUsdt = ledger.deposits.some((d) => d.assetKind === 1);
+          if (hasUsdt) label = 'zkUSDT';
+        }
+        return { tokenType, label, amount, isNative };
+      });
+  }, [midnightConnected, unshieldedBalances, ledger]);
 
-  const assetLabel = ledger ? (ledger.assetKind === 0 ? 'USDC' : 'USDT') : '';
+  const midnightZkUsdcBal = useMemo(() => {
+    const nonNative = midnightTokenEntries.filter((e) => !e.isNative && e.label === 'zkUSDC');
+    return nonNative.reduce((sum, e) => sum + e.amount, 0n);
+  }, [midnightTokenEntries]);
+
+  const midnightZkUsdtBal = useMemo(() => {
+    const nonNative = midnightTokenEntries.filter((e) => !e.isNative && e.label === 'zkUSDT');
+    return nonNative.reduce((sum, e) => sum + e.amount, 0n);
+  }, [midnightTokenEntries]);
+
+  const midnightTdustBal = useMemo(() => {
+    const native = midnightTokenEntries.filter((e) => e.isNative);
+    return native.reduce((sum, e) => sum + e.amount, 0n);
+  }, [midnightTokenEntries]);
+
+  
 
   return (
     <div className="mb-4 rounded-2xl border border-teal-200/70 bg-gradient-to-br from-teal-50/80 to-white px-3 py-3 ring-1 ring-teal-100/80">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-teal-800">Bridged & demo balances</p>
-          <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
-            Local Anvil + Yaci demo. Midnight shows zk-stables public ledger (circuit-backed) when you deploy/join below.
-          </p>
-        </div>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-teal-800">Balances</p>
         <button
           type="button"
           onClick={() => {
@@ -336,20 +403,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
               </p>
             </div>
           </div>
-          {!hasUnderlying ? (
-            <p className="mt-2 text-[9px] leading-snug text-slate-500">
-              Set <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_USDC_ADDRESS</code> /{' '}
-              <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_USDT_ADDRESS</code> for live mock underlying balances.
-            </p>
-          ) : null}
-          {!hasWrapped ? (
-            <p className="mt-1.5 text-[9px] leading-snug text-slate-500">
-              Set <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_WUSDC_ADDRESS</code> /{' '}
-              <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_DEMO_WUSDT_ADDRESS</code> from the Anvil
-              deploy JSON for bridge-minted <span className="font-medium">zkUSDC</span> / <span className="font-medium">zkUSDT</span> balances.
-            </p>
-          ) : null}
-          {evmErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">EVM: {evmErr}</p> : null}
+          {evmErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">{evmErr}</p> : null}
         </div>
 
         <div className="border-t border-teal-100/90 pt-3">
@@ -420,74 +474,61 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
               </div>
             ) : null}
           </div>
-          {!yaciBase && (cardanoSource || cardanoDest) ? (
-            <p className="mt-1.5 text-[9px] leading-snug text-slate-500">
-              Set <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_YACI_STORE_URL</code> (e.g.{' '}
-              <span className="font-mono">/yaci-store</span> with Vite proxy) to load ADA and native assets from Yaci Store.
-            </p>
-          ) : null}
-          {yaciBase && !hasCardanoNativeCols ? (
-            <p className="mt-1.5 text-[9px] leading-snug text-slate-500">
-              Optional: set <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_CARDANO_WUSDC_UNIT</code> /{' '}
-              <code className="rounded bg-white px-0.5 font-mono text-[9px]">VITE_CARDANO_WUSDT_UNIT</code> (full asset unit hex) to
-              show minted native balances.
-            </p>
-          ) : null}
-          {adaErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">Cardano: {adaErr}</p> : null}
+          {adaErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">{adaErr}</p> : null}
         </div>
 
         <div className="border-t border-teal-100/90 pt-3">
-          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-600">Midnight</p>
-          <p className="mt-0.5 font-mono text-[10px] leading-snug text-slate-600">
-            Shielded {midnightShieldedShort}
-            <span className="mx-1 text-slate-400">·</span>
-            Unshielded {unshieldedShort}
-          </p>
-          <div className="mt-2 space-y-2">
-            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2.5 py-2 ring-1 ring-violet-100/80">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">Bridge ledger (circuits)</p>
-              <p className="mt-0.5 text-lg font-semibold tabular-nums tracking-tight text-slate-900">
-                {ledger ? (
-                  <>
-                    {fmtLedgerAmount(ledger.amount)} <span className="text-base font-semibold text-violet-900">{assetLabel}</span>
-                  </>
-                ) : contractAddress ? (
-                  <span className="text-base font-medium text-slate-500">—</span>
-                ) : (
-                  <span className="text-base font-medium text-slate-400">—</span>
-                )}
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[9px] font-bold uppercase tracking-wide text-slate-600">Midnight</p>
+            {!midnightConnected && (
+              <button
+                type="button"
+                disabled={midnightBusy || midnightConnecting}
+                onClick={() => void connectMidnight()}
+                className="shrink-0 rounded-lg border border-violet-200/90 bg-white px-2.5 py-1 text-[10px] font-semibold text-violet-900 shadow-sm hover:bg-violet-50/90 disabled:opacity-50"
+              >
+                {midnightBusy || midnightConnecting ? 'Connecting…' : 'Connect'}
+              </button>
+            )}
+          </div>
+          {midnightConnected && (walletAddress || unshieldedAddress) ? (
+            <p className="mt-0.5 font-mono text-[10px] leading-snug text-slate-600">
+              {walletAddress ? <>Shielded {shortenAddress(walletAddress, { head: 14, tail: 10 })}</> : null}
+              {walletAddress && unshieldedAddress ? <span className="mx-1 text-slate-400">·</span> : null}
+              {unshieldedAddress ? <>Unshielded {shortenAddress(unshieldedAddress, { head: 14, tail: 10 })}</> : null}
+            </p>
+          ) : !midnightConnected ? (
+            <p className="mt-0.5 text-[10px] text-slate-400">Not connected</p>
+          ) : null}
+          {midnightErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">{midnightErr}</p> : null}
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">tDUST</p>
+              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                {midnightConnected ? fmtLedgerAmount(midnightTdustBal) : '—'}
               </p>
-              {ledger ? (
-                <p className="mt-1 text-[9px] leading-snug text-violet-900/80">
-                  State {ledger.stateLabel}; minted unshielded {String(ledger.mintedUnshielded)}; released{' '}
-                  {String(ledger.unshieldedReleased)}
-                </p>
-              ) : null}
-              <p className="mt-1 text-[9px] leading-snug text-slate-600">
-                Public <span className="font-medium">zk-stables</span> contract state from the indexer — amounts change when you run
-                circuit txs (<span className="font-mono">proveHolder</span>, <span className="font-mono">mintWrappedUnshielded</span>, burn
-                flow).
-              </p>
-              {contractAddress && !ledger ? (
-                <p className="mt-1 text-[9px] leading-snug text-amber-800/90">
-                  No ledger row from the indexer yet — check the Midnight indexer, then press Refresh or use Developer tools → On-chain
-                  bridge state.
-                </p>
-              ) : null}
             </div>
-            {!contractAddress ? (
-              <p className="text-[9px] leading-snug text-slate-500">
-                {demo.midnight.note?.trim() ||
-                  'Connect Lace or dev seed in Developer tools, then deploy or join a contract to load ledger balances.'}
+            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">zkUSDC</p>
+              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                {midnightConnected ? fmtLedgerAmount(midnightZkUsdcBal) : '—'}
               </p>
-            ) : null}
+            </div>
+            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">zkUSDT</p>
+              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                {midnightConnected ? fmtLedgerAmount(midnightZkUsdtBal) : '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">Deposits</p>
+              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                {midnightConnected && ledger ? ledger.depositCount : '—'}
+              </p>
+            </div>
           </div>
         </div>
       </div>
-
-      <p className="mt-3 text-[9px] leading-snug text-slate-500">
-        Mock USDC/USDT and demo keys are in the table below. zkUSDC/zkUSDT are proof-gated bridge mints on Anvil (see docs/BRIDGE_SWAP_FLOW.md).
-      </p>
     </div>
   );
 };

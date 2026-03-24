@@ -57,6 +57,15 @@ export type RelayerJobApi = {
     digest: string;
     publicInputsHex: string;
     inclusion?: Record<string, unknown>;
+    midnight?: {
+      txHash: string;
+      txId: string;
+      contractAddress: string;
+      operationType: string;
+      depositCommitmentHex: string;
+      eventCommitmentHex: string;
+      nonceCommitmentHex: string;
+    };
   };
   destinationHint?: string;
   depositCommitmentHex?: string;
@@ -121,6 +130,17 @@ export type LockIntentPayload = {
   recipient: string;
   connected?: Record<string, unknown>;
   note?: string;
+  /** Required for EVM → zk mint: anchor from on-chain `ZkStablesPoolLock.lock` (relayer proves `Locked` in the tx). */
+  source?: {
+    evm?: {
+      txHash: `0x${string}`;
+      logIndex: number;
+      blockNumber: string;
+      poolLockAddress?: `0x${string}`;
+      token?: `0x${string}`;
+      nonce?: `0x${string}`;
+    };
+  };
 };
 
 export type BurnIntentPayload = {
@@ -181,4 +201,15 @@ export async function submitBurnIntent(baseUrl: string, body: BurnIntentPayload)
 
 export function assetKindForLabel(asset: 'USDC' | 'USDT'): number {
   return asset === 'USDC' ? AssetKind.USDC : AssetKind.USDT;
+}
+
+export async function fetchMidnightContract(baseUrl: string): Promise<{ contractAddress: string | null; enabled: boolean }> {
+  const base = baseUrl.replace(/\/$/, '');
+  try {
+    const res = await fetch(`${base}/v1/midnight/contract`);
+    if (!res.ok) return { contractAddress: null, enabled: false };
+    return (await res.json()) as { contractAddress: string | null; enabled: boolean };
+  } catch {
+    return { contractAddress: null, enabled: false };
+  }
 }

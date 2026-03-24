@@ -5,12 +5,16 @@
   "type": "module",
   "scripts": {
     "copy-zk-artifacts": "node scripts/copy-zk-artifacts.mjs",
+    "sync-cardano-units": "node scripts/sync-cardano-native-units.mjs",
     "dev": "npm run copy-zk-artifacts && vite",
     "dev:fresh": "rm -rf node_modules/.vite && npm run copy-zk-artifacts && vite",
-    "build": "npm run copy-zk-artifacts && tsc --noEmit && vite build",
+    "build": "npm run copy-zk-artifacts && tsc --noEmit && vite build --mode development",
+    "build:prod": "npm run copy-zk-artifacts && tsc --noEmit && vite build --mode production",
     "preview": "vite preview",
     "start": "npm run build && vite preview --host 0.0.0.0 --port 4173",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "verify:bridge-locks": "node --env-file=.env.production scripts/verify-bridge-lock-discovery.mjs",
+    "verify:discover-parity": "node --env-file=.env.production scripts/verify-discover-parity.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

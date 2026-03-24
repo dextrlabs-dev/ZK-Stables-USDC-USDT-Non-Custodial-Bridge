@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import pino from 'pino';
 import type { BurnIntent, LockIntent } from './types.js';
+import { validateAndNormalizeEvmLockSource } from './config/evmLockIntentValidation.js';
 import { enqueueLockIntent } from './pipeline/runJob.js';
 import { getJob, listJobs } from './store.js';
 import { buildDemoWallets } from './demo/buildDemoWallets.js';
@@ -25,7 +26,7 @@ import {
   mergeRelayerBridgeIntoConnected,
   relayerBridgeSnapshot,
 } from './config/bridgeRecipients.js';
-import { isMidnightBridgeEnabled, warmupMidnightRelayer } from './midnight/service.js';
+import { isMidnightBridgeEnabled, warmupMidnightRelayer, getMidnightContractAddress } from './midnight/service.js';
 import { assertRelayerStartupConfig } from './config/srsCompliance.js';
 import { validateCardanoBurnIntentLockDatum } from './adapters/cardanoAiken/validateCardanoBurnIntent.js';
 import { loadBlueprint } from './adapters/cardanoAiken/blueprint.js';
@@ -35,6 +36,31 @@ const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
 function looksLikeEvmAddress(addr: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/u.test(addr.trim());
+}
+
+/** JSON may decode numeric fields as JS numbers; downstream uses string amounts and `parseLockNonceDecimal`. */
+function normalizeBurnIntentBody(body: BurnIntent): void {
+  const a = body.amount;
+  body.amount =
+    typeof a === 'number' && Number.isFinite(a)
+      ? String(a)
+      : String(a ?? '').trim();
+  const c = body.source?.cardano;
+  if (c && c.lockNonce != null && c.lockNonce !== '') {
+    const ln = c.lockNonce as unknown;
+    c.lockNonce =
+      typeof ln === 'number' && Number.isFinite(ln)
+        ? String(Math.trunc(ln))
+        : String(ln).trim();
+  }
+  const m = body.source?.midnight;
+  if (m && m.lockNonce != null && m.lockNonce !== '') {
+    const ln = m.lockNonce as unknown;
+    m.lockNonce =
+      typeof ln === 'number' && Number.isFinite(ln)
+        ? String(Math.trunc(ln))
+        : String(ln).trim();
+  }
 }
 assertRelayerStartupConfig(logger);
 const port = Number(process.env.RELAYER_PORT ?? 8787);
@@ -108,11 +134,19 @@ app.get('/v1/health/chains', async (c) => {
     evm: { rpcUrl: evm, ...evmSerialized },
     midnightIndexer: { url: indexer, ...mid },
     cardano,
-    relayerBridge: relayerBridgeSnapshot().configured,
+    relayerBridge: {
+      ...relayerBridgeSnapshot().configured,
+      midnight: relayerBridgeSnapshot().configured.midnight || isMidnightBridgeEnabled(),
+    },
   });
 });
 
 app.get('/v1/bridge/recipients', (c) => c.json(relayerBridgeSnapshot()));
+
+app.get('/v1/midnight/contract', async (c) => {
+  const addr = await getMidnightContractAddress();
+  return c.json({ contractAddress: addr, enabled: isMidnightBridgeEnabled() });
+});
 
 /** Lock pool script CBOR + address for Mesh in the browser (same blueprint as relayer). */
 app.get('/v1/cardano/bridge-metadata', (c) => {
@@ -173,6 +207,9 @@ app.post('/v1/intents/lock', async (c) => {
   }
   body.recipient = recipient;
 
+  const lockErr = validateAndNormalizeEvmLockSource(body);
+  if (lockErr) return c.json({ error: lockErr }, 400);
+
   const job = await enqueueLockIntent(logger, body);
   if (!job) return c.json({ error: 'duplicate or skipped' }, 409);
   return c.json({ jobId: job.id, job: serializeRelayerJob(job) }, 202);
@@ -189,6 +226,7 @@ app.post('/v1/intents/burn', async (c) => {
   if (!body.sourceChain || !['evm', 'cardano', 'midnight'].includes(body.sourceChain)) {
     return c.json({ error: 'invalid sourceChain' }, 400);
   }
+  normalizeBurnIntentBody(body);
   mergeRelayerBridgeIntoConnected(body);
   const recipient = effectiveBurnRecipient(body);
   if (!recipient) {

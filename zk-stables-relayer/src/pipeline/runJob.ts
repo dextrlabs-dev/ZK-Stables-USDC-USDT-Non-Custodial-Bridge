@@ -2,8 +2,19 @@ import { createHash, randomBytes } from 'node:crypto';
 import { encodePacked, keccak256 } from 'viem';
 import type { BridgeIntent, RelayerJob } from '../types.js';
 import { finalityDelayMs } from '../adapters/finality.js';
+import { intentAmountToTokenUnits } from '../adapters/amount.js';
 import { buildStubProofBundle } from '../zk/stubProof.js';
 import { evmMintWrapped } from '../adapters/evmMint.js';
+
+let evmMutexQueue: Promise<void> = Promise.resolve();
+async function withEvmMutex<T>(fn: () => Promise<T>): Promise<T> {
+  let release: () => void;
+  const next = new Promise<void>((r) => { release = r; });
+  const prev = evmMutexQueue;
+  evmMutexQueue = next;
+  await prev;
+  try { return await fn(); } finally { release!(); }
+}
 import { evmUnlockWithInclusionProof } from '../adapters/evmUnlock.js';
 import { evmPoolUnlockOperator } from '../adapters/evmPoolUnlockOperator.js';
 import { resolveUnderlyingTokenForAsset } from '../adapters/evmUnderlying.js';
@@ -20,6 +31,7 @@ import {
   markCardanoUtxoProcessed,
   releaseCardanoUtxo,
   reserveCardanoUtxo,
+  reserveBurnCommitment,
 } from '../store.js';
 import type { BridgeDedupeKeys } from './dedupe.js';
 import { bridgeDedupeKeysFromIntent } from './dedupe.js';
@@ -31,7 +43,10 @@ import {
   resolveYaciBaseUrl,
 } from '../adapters/cardanoIndexer.js';
 import type { Logger } from 'pino';
-import { isMidnightBridgeEnabled, runMidnightMintPipeline } from '../midnight/service.js';
+import { isMidnightBridgeEnabled, runMidnightMintPipeline, runMidnightBurnPipeline } from '../midnight/service.js';
+import type { MintPipelineArgs, BurnPipelineArgs } from '../midnight/service.js';
+import { holderLedgerPublicKey } from '../midnight/holder-key.js';
+import { AssetKind } from '@zk-stables/midnight-contract';
 import { parseDecimalAmountToUnits } from '../adapters/amount.js';
 import {
   cardanoRecipientMatchesNetwork,
@@ -51,8 +66,58 @@ function destLabel(intent: BridgeIntent): string {
   return (intent.destinationChain ?? '').toLowerCase();
 }
 
+function deriveBytes32HexFromGenesis(genesisHex: string, label: string): string {
+  return createHash('sha256').update(`${label}:${genesisHex}`, 'utf8').digest('hex');
+}
+
+function hexToBytes32(hex: string): Uint8Array {
+  const h = hex.replace(/^0x/, '');
+  if (h.length !== 64) throw new Error('expected 32-byte hex string');
+  return Uint8Array.from(Buffer.from(h, 'hex'));
+}
+
+function buildMintPipelineArgs(intent: BridgeIntent, lockRef: string): MintPipelineArgs {
+  const genesisHex = (process.env.GENESIS_SEED_HASH_HEX ?? '').trim().replace(/^0x/i, '').toLowerCase();
+  const holderSkHex = process.env.HOLDER_SK_HEX ?? (genesisHex ? deriveBytes32HexFromGenesis(genesisHex, 'zkstables:holderSk:v1') : '02'.repeat(32));
+  const holderSk = hexToBytes32(holderSkHex);
+  const holderPk = holderLedgerPublicKey(holderSk);
+
+  const depositCommitmentHex = intent.source?.evm?.nonce
+    ? intent.source.evm.nonce.replace(/^0x/, '')
+    : createHash('sha256').update(`${lockRef}:deposit`, 'utf8').digest('hex');
+  const depositCommitment = hexToBytes32(depositCommitmentHex.padStart(64, '0'));
+
+  const assetKind = intent.asset === 'USDT' ? AssetKind.USDT : AssetKind.USDC;
+  const sourceChainId = intent.sourceChain === 'cardano' ? 3n : intent.sourceChain === 'midnight' ? 4n : 1n;
+  const decimals = Number(process.env.RELAYER_EVM_TOKEN_DECIMALS ?? 6);
+  const amount = BigInt(Math.round(parseFloat(intent.amount) * 10 ** decimals));
+
+  return { depositCommitment, assetKind, sourceChainId, amount, holderPk };
+}
+
+function buildBurnPipelineArgs(intent: BridgeIntent): BurnPipelineArgs | null {
+  if (intent.operation !== 'BURN') return null;
+  const bc = intent.burnCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase();
+  if (!bc || bc.length !== 64 || !/^[0-9a-f]+$/u.test(bc)) return null;
+  const depositCommitment = hexToBytes32(bc);
+  const destChainId = BigInt(intent.source?.midnight?.destChainId ?? 2);
+  const recipientCommitment = hexToBytes32(bc);
+  return { depositCommitment, destChainId, recipientCommitment };
+}
+
 function looksLikeEvmAddress(addr: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/u.test(addr.trim());
+}
+
+function burnJobAmountRawUnits(intent: BridgeIntent): bigint {
+  if (intent.operation !== 'BURN') throw new Error('burnJobAmountRawUnits: expected BURN');
+  const evmFromLog =
+    intent.sourceChain === 'evm' && Boolean(intent.source?.evm && typeof intent.source.evm.txHash === 'string');
+  return intentAmountToTokenUnits(String(intent.amount), {
+    operation: 'BURN',
+    sourceChain: intent.sourceChain,
+    evmBurnFromChainLog: evmFromLog,
+  });
 }
 
 function relayerCardanoNetworkId(): 0 | 1 {
@@ -127,9 +192,15 @@ export async function enqueueLockIntent(logger: Logger, intent: BridgeIntent): P
     logger.info({ dedupeKey: keys.evm }, 'skip duplicate evm event');
     return null;
   }
-  if (keys.cardano && !reserveCardanoUtxo(keys.cardano)) {
+  if (keys.cardano && intent.operation !== 'BURN' && !reserveCardanoUtxo(keys.cardano)) {
     if (keys.evm) releaseEvmEvent(keys.evm);
     logger.info({ dedupeKey: keys.cardano }, 'skip duplicate cardano utxo');
+    return null;
+  }
+  if (keys.burnCommitment && !reserveBurnCommitment(keys.burnCommitment)) {
+    if (keys.evm) releaseEvmEvent(keys.evm);
+    if (keys.cardano && intent.operation !== 'BURN') releaseCardanoUtxo(keys.cardano);
+    logger.info({ burnCommitment: keys.burnCommitment }, 'skip duplicate burn commitment (would revert with "burn nonce used")');
     return null;
   }
 
@@ -232,6 +303,10 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
         publicInputsHex,
         inclusion: inc,
       };
+    } else if (job.intent.operation === 'LOCK' && job.intent.sourceChain === 'evm') {
+      throw new Error(
+        'EVM LOCK mint requires source.evm.txHash and source.evm.logIndex (on-chain Locked event). Stub proofs are not allowed for this path.',
+      );
     } else {
       proofBundle = buildStubProofBundle(job.intent, job.lockRef);
     }
@@ -315,13 +390,12 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
           'BURN unlock skipped: set RELAYER_EVM_UNDERLYING_TOKEN (and RELAYER_EVM_UNDERLYING_TOKEN_USDT for USDT)',
         );
       } else {
+        const pk = process.env.RELAYER_EVM_PRIVATE_KEY as `0x${string}`;
+        const pool = process.env.RELAYER_EVM_POOL_LOCK as `0x${string}`;
+        const wrapped = (process.env.RELAYER_EVM_WRAPPED_TOKEN ?? job.intent.source.evm.wrappedTokenAddress) as `0x${string}`;
+        const amountUnits = burnJobAmountRawUnits(job.intent);
         try {
-          const pk = process.env.RELAYER_EVM_PRIVATE_KEY as `0x${string}`;
-          const pool = process.env.RELAYER_EVM_POOL_LOCK as `0x${string}`;
-          const wrapped = (process.env.RELAYER_EVM_WRAPPED_TOKEN ?? job.intent.source.evm.wrappedTokenAddress) as `0x${string}`;
-          const decimals = Number(process.env.RELAYER_EVM_TOKEN_DECIMALS ?? 6);
-          const amountUnits = parseDecimalAmountToUnits(job.intent.amount, decimals);
-          const { txHash } = await evmUnlockWithInclusionProof({
+          const { txHash } = await withEvmMutex(() => evmUnlockWithInclusionProof({
             rpcUrl,
             privateKey: pk,
             poolLock: pool,
@@ -329,22 +403,44 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
             recipient: job.intent.recipient as `0x${string}`,
             amount: amountUnits,
             wrappedEmitter: wrapped,
-            proof: proofBundle.inclusion,
-          });
+            proof: proofBundle.inclusion!,
+          }));
           evmBurnUnlockDone = true;
           if (keys.evm) markEvmEventProcessed(keys.evm);
-          patchJob(id, { destinationHint: `${hint}\nUnlock tx: ${txHash}` });
+          patchJob(id, { destinationHint: `${hint}\nUnlock tx (inclusion proof): ${txHash}` });
         } catch (e) {
-          logger.error({ err: e, id }, 'unlockWithInclusionProof failed');
-          throw e;
+          logger.warn({ err: e, id }, 'unlockWithInclusionProof failed — falling back to operator unlock');
+          const bc = job.intent.burnCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase() ?? '';
+          if (bc.length === 64 && /^[0-9a-f]+$/u.test(bc)) {
+            try {
+              const { txHash } = await withEvmMutex(() => evmPoolUnlockOperator({
+                rpcUrl,
+                privateKey: pk,
+                poolLock: pool,
+                underlyingToken: underlying,
+                recipient: job.intent.recipient as `0x${string}`,
+                amount: amountUnits,
+                burnCommitment: `0x${bc}` as `0x${string}`,
+              }));
+              evmBurnUnlockDone = true;
+              if (keys.evm) markEvmEventProcessed(keys.evm);
+              patchJob(id, { destinationHint: `${hint}\nUnlock tx (operator fallback): ${txHash}` });
+            } catch (e2) {
+              logger.error({ err: e2, id }, 'operator unlock fallback also failed');
+              throw e2;
+            }
+          } else {
+            logger.error({ id }, 'unlockWithInclusionProof failed and no valid burnCommitmentHex for operator fallback');
+            throw e;
+          }
         }
       }
     }
 
-    // BURN on Cardano or Midnight: claim underlying on EVM (operator pool unlock; binds burnCommitmentHex as burnNonce).
+    // BURN from any source (EVM, Cardano, Midnight): operator pool unlock when inclusion proof path was not used.
     if (
       job.intent.operation === 'BURN' &&
-      (job.intent.sourceChain === 'cardano' || job.intent.sourceChain === 'midnight') &&
+      !evmBurnUnlockDone &&
       looksLikeEvmAddress(job.intent.recipient) &&
       process.env.RELAYER_EVM_POOL_LOCK &&
       process.env.RELAYER_EVM_PRIVATE_KEY
@@ -363,9 +459,8 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
           try {
             const pk = process.env.RELAYER_EVM_PRIVATE_KEY as `0x${string}`;
             const pool = process.env.RELAYER_EVM_POOL_LOCK as `0x${string}`;
-            const decimals = Number(process.env.RELAYER_EVM_TOKEN_DECIMALS ?? 6);
-            const amountUnits = parseDecimalAmountToUnits(job.intent.amount, decimals);
-            const { txHash } = await evmPoolUnlockOperator({
+            const amountUnits = burnJobAmountRawUnits(job.intent);
+            const { txHash } = await withEvmMutex(() => evmPoolUnlockOperator({
               rpcUrl,
               privateKey: pk,
               poolLock: pool,
@@ -373,7 +468,7 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
               recipient: job.intent.recipient as `0x${string}`,
               amount: amountUnits,
               burnCommitment: `0x${bc}` as `0x${string}`,
-            });
+            }));
             const j = getJob(id);
             patchJob(id, {
               destinationHint: `${j?.destinationHint ?? hint}\nEVM underlying payout (operator unlock): ${txHash}`,
@@ -413,18 +508,24 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       }
     }
 
-    // LOCK → mint on EVM dest (demo): nonce defaults to proof digest (bytes32).
+    // LOCK → mint on EVM dest: nonce defaults to proof digest (bytes32).
     if (job.intent.operation === 'LOCK' && destLabel(job.intent).includes('evm') && looksLikeEvmAddress(job.intent.recipient)) {
       const pk = process.env.RELAYER_EVM_PRIVATE_KEY as `0x${string}` | undefined;
       const bridgeMint = process.env.RELAYER_EVM_BRIDGE_MINT as `0x${string}` | undefined;
-      const wrapped = process.env.RELAYER_EVM_WRAPPED_TOKEN as `0x${string}` | undefined;
+      const wrapped = (
+        process.env.RELAYER_EVM_WRAPPED_TOKEN
+        ?? (job.intent.asset === 'USDT'
+          ? process.env.RELAYER_EVM_WRAPPED_TOKEN_USDT
+          : process.env.RELAYER_EVM_WRAPPED_TOKEN_USDC)
+      ) as `0x${string}` | undefined;
       if (pk && bridgeMint && wrapped && proofBundle.publicInputsHex) {
         try {
           const digestHex = proofBundle.digest.length >= 64 ? proofBundle.digest.slice(0, 64) : proofBundle.digest.padStart(64, '0');
           const nonce = (job.intent.source?.evm?.nonce as `0x${string}` | undefined) ?? (`0x${digestHex}` as `0x${string}`);
           const decimals = Number(process.env.RELAYER_EVM_TOKEN_DECIMALS ?? 6);
-          const amountUnits = parseDecimalAmountToUnits(job.intent.amount, decimals);
-          const { txHash } = await evmMintWrapped({
+          const amountIsRawUnits = job.intent.sourceChain === 'cardano' || job.intent.sourceChain === 'midnight';
+          const amountUnits = amountIsRawUnits ? BigInt(job.intent.amount) : parseDecimalAmountToUnits(job.intent.amount, decimals);
+          const { txHash } = await withEvmMutex(() => evmMintWrapped({
             rpcUrl,
             privateKey: pk,
             bridgeMint,
@@ -434,11 +535,17 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
             nonce,
             proofBytes: '0x',
             publicInputsHash: (`0x${proofBundle.publicInputsHex}`) as `0x${string}`,
-          });
+          }));
           patchJob(id, { destinationHint: `${hint}\nAuto-mint tx: ${txHash}` });
-        } catch (e) {
-          logger.error({ err: e, id }, 'EVM auto-mint failed');
-          throw e;
+        } catch (e: any) {
+          const msg = String(e?.message ?? e ?? '');
+          if (msg.includes('nonce used')) {
+            logger.warn({ id }, 'EVM auto-mint skipped: contract nonce already used (likely re-processed UTxO)');
+            patchJob(id, { destinationHint: `${hint}\nAuto-mint skipped: contract nonce already consumed` });
+          } else {
+            logger.error({ err: e, id }, 'EVM auto-mint failed');
+            throw e;
+          }
         }
       }
     }
@@ -482,10 +589,11 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       }
     }
 
-    // LOCK → Midnight: relayer wallet runs proveHolder + mintWrappedUnshielded (same as local-cli demo sequence).
+    // LOCK → Midnight: registerDeposit → proveHolder → mintWrappedUnshielded on registry contract.
     if (job.intent.operation === 'LOCK' && destLabel(job.intent).includes('midnight') && isMidnightBridgeEnabled()) {
       try {
-        const extra = await runMidnightMintPipeline(logger, job.intent.recipient);
+        const mintArgs = buildMintPipelineArgs(job.intent, job.lockRef);
+        const extra = await runMidnightMintPipeline(logger, mintArgs, job.intent.recipient);
         const j = getJob(id);
         const prev = j?.destinationHint ?? hint;
         patchJob(id, {
@@ -494,6 +602,28 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       } catch (e) {
         logger.error({ err: e, id }, 'midnight mint pipeline failed');
         throw e;
+      }
+    }
+
+    // BURN from Midnight: finalizeBurn on registry contract after user initiateBurn.
+    if (
+      job.intent.operation === 'BURN' &&
+      job.intent.sourceChain === 'midnight' &&
+      isMidnightBridgeEnabled()
+    ) {
+      const burnArgs = buildBurnPipelineArgs(job.intent);
+      if (burnArgs) {
+        try {
+          const extra = await runMidnightBurnPipeline(logger, burnArgs);
+          const j = getJob(id);
+          const prev = j?.destinationHint ?? hint;
+          patchJob(id, {
+            destinationHint: extra ? `${prev}\n\n--- Midnight finalizeBurn ---\n${extra}` : prev,
+          });
+        } catch (e) {
+          logger.error({ err: e, id }, 'midnight burn pipeline failed');
+          throw e;
+        }
       }
     }
 

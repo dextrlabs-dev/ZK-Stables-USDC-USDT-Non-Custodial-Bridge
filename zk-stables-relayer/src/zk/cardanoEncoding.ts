@@ -165,7 +165,21 @@ export function computeDepositCommitmentDigest(params: DepositCommitmentParams):
   return createHash('sha256').update(preimage).digest();
 }
 
-export function parseLockNonceDecimal(s?: string): bigint {
-  if (s === undefined || s === '') return 0n;
-  return BigInt(s);
+/**
+ * Lock nonce is a UInt64 on-chain; the relayer accepts it from JSON as string or number.
+ * `BigInt(11948.7)` and `BigInt("11948.7")` throw in JS — normalize first (integer prefix for stray floats).
+ */
+export function parseLockNonceDecimal(input?: unknown): bigint {
+  if (input === undefined || input === null || input === '') return 0n;
+  if (typeof input === 'bigint') return input;
+  if (typeof input === 'number') {
+    if (!Number.isFinite(input)) return 0n;
+    return BigInt(Math.trunc(input));
+  }
+  const t = String(input).trim().replace(/,/g, '');
+  if (!t) return 0n;
+  if (/^\d+$/u.test(t)) return BigInt(t);
+  const dot = t.indexOf('.');
+  if (dot > 0 && /^\d+$/.test(t.slice(0, dot))) return BigInt(t.slice(0, dot));
+  return 0n;
 }

@@ -32,6 +32,13 @@ npm start
 
 Default URL: `http://127.0.0.1:8787` (`RELAYER_PORT`).
 
+### Production
+
+- Copy **`.env.production`** (committed defaults) into your server env or merge with your secret `.env`. It sets **`RELAYER_EVM_CROSS_CHAIN_UNLOCK_FALLBACK_NONCE=proof_digest`** so Cardano/Midnight → EVM burns can omit `burnCommitmentHex` and still run **operator pool unlock** (still requires `RELAYER_EVM_POOL_LOCK`, `RELAYER_EVM_PRIVATE_KEY`, underlying token addresses). It also sets **`RELAYER_MIDNIGHT_ENABLED=true`** and a demo **`GENESIS_SEED_HASH_HEX`** (same 32-byte default as the UI / `local-cli` run-genesis; **override on real hosts**) for LOCK → Midnight (`proveHolder` + `mintWrappedUnshielded`). You must still set **`RELAYER_MIDNIGHT_CONTRACT_ADDRESS` or `RELAYER_MIDNIGHT_AUTO_DEPLOY=true`** (or startup will log that Midnight did not initialize).
+- **Midnight reminder:** Fund the relayer wallet on your Midnight network (same HD derivation as zk-stables-ui / `local-cli` from `GENESIS_SEED_HASH_HEX` or `BIP39_MNEMONIC`). Without funds and `RELAYER_MIDNIGHT_CONTRACT_ADDRESS` or `RELAYER_MIDNIGHT_AUTO_DEPLOY`, LOCK → Midnight will not run end-to-end.
+- Start with **`npm run start:prod`** (sources `.env.production` then runs the server) or load the same variables via your process manager.
+- For **strict** on-chain binding of `burnCommitmentHex`, set **`RELAYER_EVM_CROSS_CHAIN_UNLOCK_FALLBACK_NONCE=off`**.
+
 ### Demo wallets API (UI)
 
 When `RELAYER_ENABLE_DEMO_WALLETS=true`, the relayer exposes **`GET /v1/demo/wallets`** with deterministic **EVM** accounts derived from `RELAYER_DEMO_MNEMONIC_EVM` (default: Hardhat/Anvil test phrase), optional **Cardano** bech32 addresses from env, and **Midnight** example addresses for copy/paste. **Mnemonics and private keys are only included when `NODE_ENV` is not `production`.** See `.env.example` for `RELAYER_DEMO_*` variables.
@@ -108,9 +115,15 @@ See [`../scripts/README-local-evm.md`](../scripts/README-local-evm.md).
 | `GENESIS_SEED_HASH_HEX` | _(unset)_ | **Preferred:** 64 hex chars = 32-byte HD seed (same as zk-stables-ui + `local-cli` `run-genesis-all`). Deploy/join keys default from `zkstables:depositCommitment:v1` / `operatorSk` / `holderSk` unless `DEPOSIT_COMMITMENT_HEX` / `OPERATOR_SK_HEX` / `HOLDER_SK_HEX` are set. |
 | `BIP39_MNEMONIC` | _(unset)_ | Midnight relayer wallet when **`GENESIS_SEED_HASH_HEX` is not set** |
 | `RELAYER_MIDNIGHT_CONTRACT_ADDRESS` / `RELAYER_MIDNIGHT_AUTO_DEPLOY` | _(unset)_ | Midnight contract join vs deploy |
+| `RELAYER_MIDNIGHT_LEVEL_DB_PATH` / `MIDNIGHT_LEVEL_DB_PATH` | `midnight-level-db` (cwd) | LevelDB directory for Midnight private state. Set an **absolute** path in production if the process cwd is read-only or you need a stable data dir (parent dirs are created). |
+| `MIDNIGHT_LDB_PASSWORD` | _(dev default)_ | ≥16 chars encrypts LevelDB; override in production |
 | `RELAYER_BRIDGE_EVM_RECIPIENT` | _(unset)_ | `0x` address — relayer bridge EVM wallet; default `recipient` for some POST flows; echoed in `connected.relayerBridge` |
 | `RELAYER_BRIDGE_CARDANO_RECIPIENT` | _(unset)_ | Bech32 or hex payment cred — relayer bridge Cardano wallet; same semantics as EVM var for Cardano-sourced BURN and midnight flows |
 | `RELAYER_BRIDGE_MIDNIGHT_RECIPIENT` | _(unset)_ | Midnight bech32 destination for Cardano lock watcher when `RELAYER_CARDANO_RECIPIENT_STUB` is empty |
+
+**Cardano concurrency:** Mesh `submitTx` paths that spend the bridge wallet (`lock_pool` mint+release, `BridgeRelease`, native mint/payout) run **one at a time** via `src/adapters/cardanoBridgeMutex.ts`. Without that, concurrent jobs (e.g. two HTTP LOCK → Cardano intents) could select overlapping UTxOs and fail with `BadInputsUTxO` / `ValueNotConservedUTxO`.
+
+**Midnight concurrency / LevelDB:** `proveHolder` + `mintWrappedUnshielded` run **one job at a time** via `src/midnight/midnightPipelineMutex.ts`. The private-state provider opens LevelDB per operation; overlapping jobs used to throw `Database failed to open`. Point `RELAYER_MIDNIGHT_LEVEL_DB_PATH` at a writable directory if you still see open errors (e.g. read-only cwd).
 
 Copy `.env.example` to `.env` and set your project id locally — **do not commit** API keys.
 

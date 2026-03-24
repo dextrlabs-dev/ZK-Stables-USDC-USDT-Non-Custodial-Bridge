@@ -8,8 +8,10 @@
  *
  * Or: set -a && source zk-stables-relayer/.env && set +a && node scripts/fund-cardano-demo-from-yaci.mjs
  *
- * Requires: RELAYER_YACI_URL, RELAYER_YACI_ADMIN_URL, RELAYER_CARDANO_WALLET_MNEMONIC
- * Optional: RELAYER_CARDANO_TOPUP_ADA (default 50000), RELAYER_CARDANO_NETWORK_ID (default 0)
+ * Requires: RELAYER_YACI_URL, RELAYER_CARDANO_WALLET_MNEMONIC
+ * Optional: RELAYER_YACI_ADMIN_URL (default http://127.0.0.1:10000), RELAYER_CARDANO_TOPUP_ADA (default 50000)
+ * Optional: RELAYER_CARDANO_NETWORK_ID (default 0), RELAYER_UI_ENV (default zk-stables-ui/.env.development)
+ * Scans relayer + UI .env for every addr_test1… / addr1… (payment + script) and tops each up.
  * Optional: RELAYER_RELAYER_ENV path to .env (default: zk-stables-relayer/.env next to repo root)
  */
 import { readFileSync, existsSync } from 'node:fs';
@@ -47,28 +49,27 @@ const envPath = process.env.RELAYER_RELAYER_ENV?.trim() || DEFAULT_ENV;
 loadDotEnvFile(envPath);
 
 const yaci = (process.env.RELAYER_YACI_URL ?? process.env.YACI_URL ?? '').trim().replace(/\/$/, '');
-const admin = (process.env.RELAYER_YACI_ADMIN_URL ?? process.env.YACI_ADMIN_URL ?? '').trim().replace(/\/$/, '');
+const admin = (
+  process.env.RELAYER_YACI_ADMIN_URL ??
+  process.env.YACI_ADMIN_URL ??
+  'http://127.0.0.1:10000'
+)
+  .trim()
+  .replace(/\/$/, '');
 const rawMn = (process.env.RELAYER_CARDANO_WALLET_MNEMONIC ?? '').trim();
 const demoMn = (process.env.RELAYER_DEMO_MNEMONIC_CARDANO ?? '').trim();
 const adaAmount = String(process.env.RELAYER_CARDANO_TOPUP_ADA ?? '50000');
 const networkId = Number(process.env.RELAYER_CARDANO_NETWORK_ID ?? 0);
 
-/** Bech32 payment addresses mentioned in relayer .env (local Yaci = testnet). */
+/** Any Cardano bech32 in file (payment `addr_test1q…` / `addr1…`, script `addr_test1w…`, stake refs, etc.). */
 function addrsFromEnvFile(path) {
   const set = new Set();
   if (!existsSync(path)) return set;
   const text = readFileSync(path, 'utf8');
-  const re = /^[A-Za-z0-9_]+=(.+)$/gm;
+  const re = /\b(addr_test1[0-9a-z]+|addr1[0-9a-z]+)\b/gi;
   let m;
   while ((m = re.exec(text)) !== null) {
-    let val = m[1].trim();
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
-    }
-    if (val.startsWith('addr_test1')) set.add(val);
+    set.add(m[1].toLowerCase());
   }
   return set;
 }
@@ -85,8 +86,8 @@ async function changeForMnemonic(mnemonic) {
   return wallet.getChangeAddress();
 }
 
-if (!yaci || !admin) {
-  console.error('Missing RELAYER_YACI_URL and RELAYER_YACI_ADMIN_URL (or YACI_*).');
+if (!yaci) {
+  console.error('Missing RELAYER_YACI_URL (or YACI_URL).');
   process.exit(1);
 }
 if (!rawMn) {
@@ -95,6 +96,10 @@ if (!rawMn) {
 }
 
 const targets = new Set(addrsFromEnvFile(envPath));
+const uiEnvPath =
+  process.env.RELAYER_UI_ENV?.trim() || join(REPO_ROOT, 'zk-stables-ui', '.env.development');
+for (const a of addrsFromEnvFile(uiEnvPath)) targets.add(a);
+
 const operatorChange = await changeForMnemonic(rawMn);
 targets.add(operatorChange);
 if (demoMn && demoMn !== rawMn) {
@@ -107,7 +112,9 @@ if (demoMn && demoMn !== rawMn) {
 
 const fs = new YaciProvider(yaci, admin);
 
-const list = [...targets].filter((a) => a.startsWith('addr_test1')).sort();
+const list = [...targets]
+  .filter((a) => a.startsWith('addr_test1') || a.startsWith('addr1'))
+  .sort();
 console.log(`Yaci Store: ${yaci}\nAdmin: ${admin}\nTopup: ${adaAmount} ADA each\n`);
 console.log(`${list.length} unique addr_test1 address(es):\n${list.map((a) => `  ${a}`).join('\n')}\n`);
 

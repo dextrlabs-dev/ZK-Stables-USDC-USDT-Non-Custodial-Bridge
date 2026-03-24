@@ -10,6 +10,17 @@ export type LockIntent = {
   assetKind: number;
   amount: string;
   recipient: string;
+  /** Required when sourceChain is `evm`: anchor from on-chain `ZkStablesPoolLock.lock`. */
+  source?: {
+    evm?: {
+      txHash: `0x${string}`;
+      logIndex: number;
+      blockNumber: string;
+      poolLockAddress?: `0x${string}`;
+      token?: `0x${string}`;
+      nonce?: `0x${string}`;
+    };
+  };
 };
 
 export type BurnIntent = {

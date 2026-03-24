@@ -27,30 +27,17 @@ import {
   randomBytes32Hex,
   zkStableBurnAbi,
 } from '../lib/evmZkStableBurn.js';
+import { proofAlgorithmSummary } from '../lib/bridgeJobTxLog.js';
+import {
+  defaultRelayerBaseUrl,
+  type RelayerJobApi,
+  type RelayerHealthChains,
+} from '../lib/relayerClient.js';
 
-const defaultRelayerUrl = () =>
-  (import.meta.env.VITE_RELAYER_URL && String(import.meta.env.VITE_RELAYER_URL).trim()) || 'http://127.0.0.1:8787';
-
-type RelayerChainsCardano = {
-  provider?: string;
-  skipped?: boolean;
-  note?: string;
+type RelayerChainsCardano = NonNullable<RelayerHealthChains['cardano']> & {
   latestBlockHeight?: number;
-  ok?: boolean;
   error?: string;
   blockfrostIgnored?: boolean;
-};
-
-type RelayerJob = {
-  id: string;
-  phase: string;
-  lockRef: string;
-  proofBundle?: { algorithm: string; digest: string; publicInputsHex: string };
-  destinationHint?: string;
-  depositCommitmentHex?: string;
-  error?: string;
-  intent: unknown;
-  ui?: { phaseLabel: string; phaseIndex: number; phaseCount: number };
 };
 
 const RELAYER_STUB_WARN_DISMISS_KEY = 'zk-stables-ui-dismiss-relayer-stub-warn';
@@ -88,8 +75,8 @@ export const CrossChainIntentPanel: React.FC = () => {
   const [midnightBurnTxId, setMidnightBurnTxId] = useState('');
   const [midnightBurnDestChain, setMidnightBurnDestChain] = useState('');
   const [lastIntent, setLastIntent] = useState<string | null>(null);
-  const [relayerUrl] = useState(defaultRelayerUrl);
-  const [relayerJob, setRelayerJob] = useState<RelayerJob | null>(null);
+  const [relayerUrl] = useState(defaultRelayerBaseUrl);
+  const [relayerJob, setRelayerJob] = useState<RelayerJobApi | null>(null);
   const [relayerError, setRelayerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [relayerChainsCardano, setRelayerChainsCardano] = useState<RelayerChainsCardano | null>(null);
@@ -98,6 +85,10 @@ export const CrossChainIntentPanel: React.FC = () => {
   );
   const [advancedJsonOpen, setAdvancedJsonOpen] = useState(false);
   const [relayerJustCompleted, setRelayerJustCompleted] = useState(false);
+  /** EVM LOCK: required by relayer — from `ZkStablesPoolLock.lock` receipt (see main Bridge card for one-click lock). */
+  const [evmLockTxHash, setEvmLockTxHash] = useState('');
+  const [evmLockLogIndex, setEvmLockLogIndex] = useState('');
+  const [evmLockBlockNumber, setEvmLockBlockNumber] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const relayerPhaseRef = useRef<string | null>(null);
   const relayerJobIdRef = useRef<string | null>(null);
@@ -107,6 +98,9 @@ export const CrossChainIntentPanel: React.FC = () => {
     setEvmBurnWalletMsg(null);
     setMidnightBurnTxId('');
     setMidnightBurnDestChain('');
+    setEvmLockTxHash('');
+    setEvmLockLogIndex('');
+    setEvmLockBlockNumber('');
   }, [operation, asset, sourceChain]);
 
   useEffect(() => {
@@ -145,7 +139,7 @@ export const CrossChainIntentPanel: React.FC = () => {
       return;
     }
     if (!evmAddress) {
-      setEvmBurnWalletMsg('Connect an EVM wallet (same network as the demo tokens).');
+      setEvmBurnWalletMsg('Connect an EVM wallet on the same network as the zk tokens.');
       return;
     }
     if (!publicClient) {
@@ -327,6 +321,23 @@ export const CrossChainIntentPanel: React.FC = () => {
         }
       }
     }
+    if (operation === 'LOCK' && sourceChain === 'evm') {
+      const tx = evmLockTxHash.trim();
+      const liStr = evmLockLogIndex.trim();
+      const bn = evmLockBlockNumber.trim();
+      if (!/^0x[0-9a-fA-F]{64}$/u.test(tx) || liStr === '' || bn === '') {
+        return null;
+      }
+      const li = Number.parseInt(liStr, 10);
+      if (!Number.isInteger(li) || li < 0) return null;
+      base.source = {
+        evm: {
+          txHash: tx,
+          logIndex: li,
+          blockNumber: bn,
+        },
+      };
+    }
     return base;
   }, [
     operation,
@@ -350,6 +361,9 @@ export const CrossChainIntentPanel: React.FC = () => {
     midnightShieldedAddress,
     midnightUnshieldedAddress,
     zkSymbol,
+    evmLockTxHash,
+    evmLockLogIndex,
+    evmLockBlockNumber,
   ]);
 
   const recordLockIntent = useCallback(() => {
@@ -420,7 +434,9 @@ export const CrossChainIntentPanel: React.FC = () => {
             : sourceChain === 'cardano' || sourceChain === 'midnight'
               ? 'Redeem from Cardano/Midnight requires an EVM 0x… recipient (40 hex chars) and valid burn fields.'
               : 'Add a recipient before submitting.'
-          : 'Add a recipient address before submitting.',
+          : sourceChain === 'evm'
+            ? 'LOCK from EVM needs recipient plus lock tx hash (0x + 64 hex), log index, and block number from your on-chain pool.lock — or use the Bridge card “Lock … on-chain” flow.'
+            : 'Add a recipient address before submitting.',
       );
       return;
     }
@@ -435,7 +451,7 @@ export const CrossChainIntentPanel: React.FC = () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = (await res.json()) as { jobId?: string; job?: RelayerJob; error?: string };
+      const data = (await res.json()) as { jobId?: string; job?: RelayerJobApi; error?: string };
       if (!res.ok) throw new Error(data.error ?? res.statusText);
       const job = data.job;
       if (!job?.id) {
@@ -447,7 +463,7 @@ export const CrossChainIntentPanel: React.FC = () => {
       pollRef.current = setInterval(async () => {
         try {
           const st = await fetch(`${relayerUrl.replace(/\/$/, '')}/v1/jobs/${job.id}`);
-          const j = (await st.json()) as RelayerJob;
+          const j = (await st.json()) as RelayerJobApi;
           if (st.ok) {
             setRelayerJob(j);
             if (j.phase === 'completed' || j.phase === 'failed') stopPoll();
@@ -492,9 +508,10 @@ export const CrossChainIntentPanel: React.FC = () => {
           Cross-chain intents
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Send a <strong>lock</strong> (mint path: lock <strong>USDC/USDT on EVM</strong> → zk on Cardano/Midnight) or <strong>redeem</strong> (burn zk on source
-          chain; <strong>underlying pays on EVM</strong> for Cardano/Midnight burns) to the <strong>zk-stables-relayer</strong>. HTTP LOCK requires{' '}
-          <code>sourceChain: evm</code>. The relayer waits for finality, runs proof/stub steps, then returns status and hints.
+          Send a <strong>lock</strong> (mint path: you must <strong>already</strong> have called on-chain <code>approve</code> + <code>ZkStablesPoolLock.lock</code> so USDC/USDT
+          moved into the pool; the relayer then proves that <code>Locked</code> log) or <strong>redeem</strong> (burn zk on source chain; underlying pays on EVM for Cardano/Midnight
+          burns). HTTP LOCK requires <code>sourceChain: evm</code> and <code>source.evm</code> (tx hash, log index, block number). Use the main Bridge card for a guided lock +
+          submit flow.
         </Typography>
         <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1} sx={{ mb: 1 }}>
           <Typography variant="caption" color="text.secondary">
@@ -520,10 +537,9 @@ export const CrossChainIntentPanel: React.FC = () => {
           )}
         </Stack>
         {!hideRelayerStubWarn && (
-          <Alert severity="warning" sx={{ mb: 2 }} onClose={dismissRelayerStubWarn}>
-            Reference relayer keeps jobs in memory and uses stub proofs — data is lost when the process stops. Start it with{' '}
+          <Alert severity="info" sx={{ mb: 2 }} onClose={dismissRelayerStubWarn}>
+            Production relayer enforces real proofs (<code>RELAYER_STRICT_PROOFS=true</code>). Jobs are kept in memory — data is lost when the process stops. Start it with{' '}
             <code>cd zk-stables-relayer &amp;&amp; npm start</code>, or point the UI at your relayer with <code>VITE_RELAYER_URL</code>.
-            Closing this message saves your choice in the browser until site data is cleared.
           </Alert>
         )}
         {relayerError && (
@@ -541,7 +557,7 @@ export const CrossChainIntentPanel: React.FC = () => {
             onChange={(e) => setOperation(e.target.value as 'LOCK' | 'BURN')}
             helperText={
               operation === 'LOCK'
-                ? 'Lock USDC/USDT on EVM toward zkUSDC/zkUSDT on the destination (Cardano/Midnight).'
+                ? 'Requires a real on-chain pool.lock first; fill lock tx + log index below (or use the Bridge card).'
                 : `Redeem: burn ${zkSymbol} on the source chain; underlying ${asset} is paid on EVM after proof (Cardano/Midnight source).`
             }
           >
@@ -588,10 +604,42 @@ export const CrossChainIntentPanel: React.FC = () => {
               helperText={
                 operation === 'BURN'
                   ? `Face value: you burn ${zkSymbol} and unlock the same amount in ${asset}.`
-                  : 'Decimal string as your integration expects (demo default is a plain number).'
+                  : 'Decimal string as your integration expects.'
               }
             />
           </Stack>
+          {operation === 'LOCK' && sourceChain === 'evm' && (
+            <Stack spacing={1.5}>
+              <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
+                From your <code>ZkStablesPoolLock.lock</code> receipt: transaction hash, <code>Locked</code> log index, and block number (USDC/USDT must already be in the pool).
+              </Typography>
+              <TextField
+                label="Lock transaction hash"
+                size="small"
+                fullWidth
+                value={evmLockTxHash}
+                onChange={(e) => setEvmLockTxHash(e.target.value.trim())}
+                placeholder="0x + 64 hex chars"
+              />
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <TextField
+                  label="Locked log index"
+                  size="small"
+                  fullWidth
+                  value={evmLockLogIndex}
+                  onChange={(e) => setEvmLockLogIndex(e.target.value.trim())}
+                  placeholder="e.g. 0"
+                />
+                <TextField
+                  label="Block number"
+                  size="small"
+                  fullWidth
+                  value={evmLockBlockNumber}
+                  onChange={(e) => setEvmLockBlockNumber(e.target.value.trim())}
+                />
+              </Stack>
+            </Stack>
+          )}
           {operation === 'BURN' && (
             <>
               {sourceChain === 'evm' && (
@@ -644,7 +692,7 @@ export const CrossChainIntentPanel: React.FC = () => {
                     <Typography variant="caption" color="warning.dark" sx={{ display: 'block', maxWidth: 420 }}>
                       {!wrappedTokenAddress
                         ? 'Set VITE_DEMO_WUSDC_ADDRESS / VITE_DEMO_WUSDT_ADDRESS in .env and restart Vite.'
-                        : 'Connect an EVM wallet (or Anvil demo) on Hardhat (31337) for local zk tokens.'}
+                        : 'Connect an EVM wallet to burn zk tokens.'}
                     </Typography>
                   ) : null}
                   {evmBurnWalletMsg ? (
@@ -895,7 +943,7 @@ export const CrossChainIntentPanel: React.FC = () => {
               </Typography>
               {relayerJob.proofBundle && (
                 <Typography variant="dataMonoDense" component="div" sx={{ wordBreak: 'break-all' }}>
-                  proof: {relayerJob.proofBundle.algorithm} · {relayerJob.proofBundle.digest}
+                  proof: {proofAlgorithmSummary(relayerJob.proofBundle.algorithm)} · {relayerJob.proofBundle.digest}
                 </Typography>
               )}
               {relayerJob.depositCommitmentHex && (

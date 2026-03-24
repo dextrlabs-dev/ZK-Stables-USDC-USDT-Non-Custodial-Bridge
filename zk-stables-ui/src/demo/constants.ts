@@ -11,7 +11,7 @@ export const ANVIL_DEMO_ACCOUNTS = [
 export const DEMO_MIDNIGHT_SHIELDED =
   'mn_addr_undeployed1ry6lnrfldz80fdvwrpxf5yyfftej5mjjj466dfpgcymh955j3gusey46r3';
 
-/** Synthetic CIP-30-style payload (hex payment credential) for UI-only demo when no extension is present. */
+/** Synthetic demo payload (hex payment credential) for UI preview when mnemonic is not configured. */
 export const DEMO_CARDANO_USED_HEX =
   '005868020a9edf2045716fa575bb82e694f23a785bdfddb6db2cbf750000000000000000000000000';
 
