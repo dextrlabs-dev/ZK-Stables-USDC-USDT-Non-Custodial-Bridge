@@ -107,6 +107,11 @@ export type BurnIntent = {
       destChainId?: number;
       /** Optional echo of lock nonce for deposit commitment (decimal string). */
       lockNonce?: string;
+      /**
+       * Ledger `depositCommitment` (64 hex) for the registry row — **not** the same as `burnCommitmentHex`
+       * (which is `recipientComm` passed to `initiateBurn`). Required for relayer `finalizeBurn` pipeline.
+       */
+      depositCommitmentHex?: string;
     };
   };
   /** Optional echo of connected wallets (UI); recipient must still be a source-chain address, not Midnight. */

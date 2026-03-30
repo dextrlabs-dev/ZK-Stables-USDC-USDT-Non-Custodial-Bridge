@@ -19,6 +19,8 @@ export function validateAndNormalizeEvmLockSource(body: LockIntent): string | nu
   if (!isHexTxHash(ev.txHash)) {
     return 'source.evm.txHash must be a 0x-prefixed 64-character hex string (32-byte tx hash).';
   }
+  const txNorm = ev.txHash.trim().toLowerCase() as `0x${string}`;
+  (body.source!.evm as { txHash: `0x${string}` }).txHash = txNorm;
 
   const liRaw = ev.logIndex as unknown;
   let logIndex: number;

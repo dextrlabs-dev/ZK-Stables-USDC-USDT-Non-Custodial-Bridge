@@ -41,6 +41,44 @@ function createFetcherSubmitter(): (IFetcher & ISubmitter) | null {
 
 type BridgeCtx = { wallet: MeshWallet; fetcher: IFetcher & ISubmitter; meshNetwork: Network };
 
+/** Sum lovelace across all UTxOs currently visible to the Mesh wallet. */
+export async function sumBridgeWalletLovelace(wallet: MeshWallet): Promise<bigint> {
+  const utxos: UTxO[] = await wallet.getUtxos();
+  let sum = 0n;
+  for (const u of utxos) {
+    for (const a of u.output.amount) {
+      if (a.unit === 'lovelace') sum += BigInt(a.quantity);
+    }
+  }
+  return sum;
+}
+
+/**
+ * Fail before Mesh tx build when the operator wallet cannot cover outputs + fees (common on fresh Yaci).
+ * Mesh otherwise returns `Insufficient input` / `ada in inputs: 0`.
+ */
+export async function assertBridgeWalletMinLovelace(params: {
+  wallet: MeshWallet;
+  /** Minimum total lovelace that must be present in wallet UTxOs (outputs + fee buffer). */
+  minLovelace: bigint;
+  changeAddress: string;
+  logger: Logger;
+}): Promise<void> {
+  const sum = await sumBridgeWalletLovelace(params.wallet);
+  if (sum < params.minLovelace) {
+    params.logger.warn(
+      { change: params.changeAddress, sum: sum.toString(), min: params.minLovelace.toString() },
+      'cardano bridge wallet ADA below minimum for settlement',
+    );
+    throw new Error(
+      `Cardano bridge wallet has insufficient ADA (wallet UTxO lovelace total ${sum}, need at least ${params.minLovelace} for this settlement + fees). ` +
+        `Operator change address: ${params.changeAddress}. ` +
+        `Fund on Yaci (e.g. DevKit admin topup) or from repo root run: npm run fund:cardano-yaci (needs RELAYER_YACI_URL and RELAYER_YACI_ADMIN_URL, default admin :10000). ` +
+        `See docs/CARDANO_LOCAL_YACI.md.`,
+    );
+  }
+}
+
 let cached: Promise<BridgeCtx | null> | null = null;
 
 export function ensureCardanoBridgeWallet(logger: Logger): Promise<BridgeCtx | null> {

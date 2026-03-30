@@ -268,6 +268,16 @@ app.post('/v1/intents/burn', async (c) => {
         400,
       );
     }
+    const dch = mid?.depositCommitmentHex?.replace(/^0x/i, '').trim() ?? '';
+    if (dch.length !== 64 || !/^[0-9a-fA-F]+$/.test(dch)) {
+      return c.json(
+        {
+          error:
+            'Midnight BURN requires source.midnight.depositCommitmentHex: 64 hex chars — the registry ledger deposit key (not the same as burnCommitmentHex / recipientComm)',
+        },
+        400,
+      );
+    }
   }
 
   const cardanoCheck = await validateCardanoBurnIntentLockDatum(body, logger);
@@ -299,8 +309,14 @@ if (isMidnightBridgeEnabled()) {
     .catch((e) => logger.error({ err: e }, 'Midnight relayer warmup failed'));
 }
 
-// EVM + Cardano watchers (required when RELAYER_SRS_STRICT — env must list addresses/tokens; see docs/SRS_RELAYER_REQUIREMENTS.md).
-void runEvmLockWatcher(logger);
+// EVM + Cardano watchers (SRS still allows HTTP POST anchors; pool watcher is optional).
+if (process.env.RELAYER_EVM_LOCK_WATCHER_ENABLED === 'true' || process.env.RELAYER_EVM_LOCK_WATCHER_ENABLED === '1') {
+  void runEvmLockWatcher(logger);
+} else {
+  logger.info(
+    'evmLockWatcher disabled (set RELAYER_EVM_LOCK_WATCHER_ENABLED=true only for bridge-recipient pool locks; HTTP CLI/UI mints must not race watcher dedupe)',
+  );
+}
 void runEvmBurnWatcher(logger);
 void runCardanoLockWatcher(logger);
 

@@ -24,6 +24,11 @@ export type SourceChainKind = 'evm' | 'cardano' | 'midnight';
 export type CrossChainWalletContextValue = {
   cardanoWalletKey: string | null;
   cardanoUsedAddressesHex: string[];
+  /**
+   * Mesh `getChangeAddress()` when `VITE_DEMO_CARDANO_WALLET_MNEMONIC` is set — same keying as
+   * `ForgeScript.withOneSignature(change)` / Yaci units sync. Use for balance UTxOs; relayer demo bech32 can differ.
+   */
+  cardanoMeshChangeBech32: string | null;
   cardanoNetworkId: number | null;
   cardanoDisplay: string | null;
   /** In-app mnemonic mode (`cardanoWalletKey === 'demo'`). */
@@ -51,6 +56,7 @@ export const CrossChainWalletProvider: React.FC<PropsWithChildren> = ({ children
   const [cardanoUsedAddressesHex, setCardanoUsedAddressesHex] = useState<string[]>(() =>
     isDemoCardanoMnemonicConfigured() ? [DEMO_CARDANO_USED_HEX] : [],
   );
+  const [cardanoMeshChangeBech32, setCardanoMeshChangeBech32] = useState<string | null>(null);
   const [cardanoNetworkId, setCardanoNetworkId] = useState<number | null>(() =>
     isDemoCardanoMnemonicConfigured() ? initialCardanoNetworkFromEnv() : null,
   );
@@ -59,6 +65,7 @@ export const CrossChainWalletProvider: React.FC<PropsWithChildren> = ({ children
     skipMnemonicAutofillRef.current = false;
     setCardanoWalletKey('demo');
     setCardanoUsedAddressesHex([DEMO_CARDANO_USED_HEX]);
+    setCardanoMeshChangeBech32(null);
     setCardanoNetworkId(initialCardanoNetworkFromEnv());
   }, []);
 
@@ -66,24 +73,40 @@ export const CrossChainWalletProvider: React.FC<PropsWithChildren> = ({ children
     skipMnemonicAutofillRef.current = true;
     setCardanoWalletKey(null);
     setCardanoUsedAddressesHex([]);
+    setCardanoMeshChangeBech32(null);
     setCardanoNetworkId(null);
   }, []);
 
   useEffect(() => {
-    if (!isDemoCardanoMnemonicConfigured() || cardanoWalletKey !== 'demo') return;
+    if (!isDemoCardanoMnemonicConfigured() || cardanoWalletKey !== 'demo') {
+      setCardanoMeshChangeBech32(null);
+      return;
+    }
     const first = cardanoUsedAddressesHex[0];
-    if (first && first !== DEMO_CARDANO_USED_HEX) return;
+    /** Only replace placeholder used list; avoids re-fetch loop once real hex is set. */
+    const needsUsedHydration = !first || first === DEMO_CARDANO_USED_HEX;
     let cancelled = false;
     void (async () => {
       try {
         const w = await createDemoMnemonicMeshWallet();
+        const ch = w.getChangeAddress()?.trim() ?? '';
+        if (
+          !cancelled &&
+          ch &&
+          (ch.startsWith('addr_test1') || (ch.startsWith('addr1') && !ch.startsWith('addr_test1')))
+        ) {
+          setCardanoMeshChangeBech32(ch);
+        } else if (!cancelled) {
+          setCardanoMeshChangeBech32(null);
+        }
+        if (!needsUsedHydration) return;
         const used = await w.getUsedAddresses();
         const nid = await w.getNetworkId();
         if (cancelled || used.length === 0) return;
         setCardanoUsedAddressesHex(used);
         setCardanoNetworkId(nid);
       } catch {
-        /* Keep placeholder until Yaci / env is fixed */
+        if (!cancelled) setCardanoMeshChangeBech32(null);
       }
     })();
     return () => {
@@ -106,6 +129,7 @@ export const CrossChainWalletProvider: React.FC<PropsWithChildren> = ({ children
     () => ({
       cardanoWalletKey,
       cardanoUsedAddressesHex,
+      cardanoMeshChangeBech32,
       cardanoNetworkId,
       cardanoDisplay,
       isDemoCardano,
@@ -117,6 +141,7 @@ export const CrossChainWalletProvider: React.FC<PropsWithChildren> = ({ children
       cardanoBech32Preview,
       cardanoDisplay,
       isDemoCardano,
+      cardanoMeshChangeBech32,
       cardanoNetworkId,
       cardanoUsedAddressesHex,
       cardanoWalletKey,

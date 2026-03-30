@@ -6,6 +6,8 @@ export const ReviewSheet: React.FC<{
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  /** When true, user cannot confirm (incomplete burn anchor, missing pool lock, etc.). */
+  confirmDisabled?: boolean;
   confirming: boolean;
   operation: 'LOCK' | 'BURN';
   sourceChain: string;
@@ -33,6 +35,7 @@ export const ReviewSheet: React.FC<{
   open,
   onClose,
   onConfirm,
+  confirmDisabled = false,
   confirming,
   operation,
   sourceChain,
@@ -111,7 +114,7 @@ export const ReviewSheet: React.FC<{
       </button>
       <button
         type="button"
-        disabled={confirming}
+        disabled={confirming || confirmDisabled}
         onClick={onConfirm}
         className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:opacity-50"
       >

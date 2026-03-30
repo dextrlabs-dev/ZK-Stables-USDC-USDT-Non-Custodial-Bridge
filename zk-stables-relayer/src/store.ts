@@ -29,7 +29,8 @@ export function patchJob(id: string, patch: Partial<RelayerJob>): RelayerJob | u
 }
 
 export function evmEventDedupeKey(txHash: string, logIndex: number | bigint): string {
-  return `evm:${txHash}:${logIndex.toString()}`;
+  const h = String(txHash).trim().toLowerCase();
+  return `evm:${h}:${BigInt(logIndex).toString()}`;
 }
 
 export function isEvmEventProcessed(key: string): boolean {

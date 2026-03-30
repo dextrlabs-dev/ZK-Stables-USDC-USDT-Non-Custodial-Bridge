@@ -42,6 +42,11 @@ interface ImportMetaEnv {
   readonly VITE_ZK_SOURCE_CHAIN_ID?: string;
   /** ZK deposit encoding: EVM destination chain id (align with RELAYER_ZK_DEST_CHAIN_ID). */
   readonly VITE_ZK_DEST_CHAIN_ID?: string;
+  /** Same 64-hex seed as relayer `GENESIS_SEED_HASH_HEX` for local dev-seed wallet. */
+  readonly VITE_GENESIS_SEED_HASH_HEX?: string;
+  readonly VITE_MIDNIGHT_PROOF_SERVER_PORT?: string;
+  /** Pre-filled Join address; must equal `RELAYER_MIDNIGHT_CONTRACT_ADDRESS` on the relayer. */
+  readonly VITE_DEFAULT_MIDNIGHT_JOIN_ADDRESS?: string;
 }
 
 interface ImportMeta {

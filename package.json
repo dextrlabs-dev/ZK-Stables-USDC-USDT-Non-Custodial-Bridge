@@ -5,6 +5,7 @@
   "workspaces": [
     "contract",
     "local-cli",
+    "bridge-cli",
     "zk-stables-relayer",
     "zk-stables-ui"
   ],
@@ -22,7 +23,9 @@
     "contract:build": "npm run build -w @zk-stables/midnight-contract",
     "run-genesis": "npm run run-genesis -w @zk-stables/local-cli",
     "run-registry-all": "npm run run-registry-all -w @zk-stables/local-cli",
-    "bridge-flow-report": "node scripts/full-bridge-flow-report.mjs"
+    "bridge-flow-report": "node scripts/full-bridge-flow-report.mjs",
+    "bridge-cli": "npm run start -w @zk-stables/bridge-cli",
+    "bridge-cli:build": "npm run build -w @zk-stables/bridge-cli"
   },
   "devDependencies": {
     "patch-package": "^8.0.0"

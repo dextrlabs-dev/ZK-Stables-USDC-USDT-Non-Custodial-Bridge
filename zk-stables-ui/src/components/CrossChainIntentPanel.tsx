@@ -305,20 +305,22 @@ export const CrossChainIntentPanel: React.FC = () => {
       }
       if (sourceChain === 'midnight') {
         const txId = midnightBurnTxId.trim() || lastMidnightBurnAnchor?.txId;
-        if (txId) {
-          const dc = Number.parseInt(
-            (midnightBurnDestChain.trim() || lastMidnightBurnAnchor?.destChain || '0').trim(),
-            10,
-          );
-          base.source = {
-            midnight: {
-              txId,
-              txHash: lastMidnightBurnAnchor?.txHash,
-              contractAddress: lastMidnightBurnAnchor?.contractAddress ?? undefined,
-              destChainId: Number.isFinite(dc) ? dc : undefined,
-            },
-          };
-        }
+        if (!txId) return null;
+        const depLedger = lastMidnightBurnAnchor?.depositCommitmentHex64?.replace(/^0x/i, '').trim().toLowerCase() ?? '';
+        if (depLedger.length !== 64 || !/^[0-9a-f]+$/u.test(depLedger)) return null;
+        const dc = Number.parseInt(
+          (midnightBurnDestChain.trim() || lastMidnightBurnAnchor?.destChain || '0').trim(),
+          10,
+        );
+        base.source = {
+          midnight: {
+            txId,
+            txHash: lastMidnightBurnAnchor?.txHash,
+            contractAddress: lastMidnightBurnAnchor?.contractAddress ?? undefined,
+            destChainId: Number.isFinite(dc) ? dc : undefined,
+            depositCommitmentHex: depLedger,
+          },
+        };
       }
     }
     if (operation === 'LOCK' && sourceChain === 'evm') {

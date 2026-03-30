@@ -23,29 +23,55 @@ function meshPlutusIntegerToBigInt(field: unknown, label: string): bigint {
   return BigInt(t);
 }
 
+/** Mesh `deserializeDatum` uses `constructor` for nested Constr; `mConStr*` / older paths use `alternative`. */
+function meshConstrIndex(v: unknown): number | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as { alternative?: number; constructor?: number };
+  if (typeof o.alternative === 'number') return o.alternative;
+  if (typeof o.constructor === 'number') return o.constructor;
+  return undefined;
+}
+
+/** ByteArray / hash fields from `deserializeDatum` are often `{ bytes: "hexWithout0x" }`, not plain strings. */
+export function meshPlutusBytesToHex(v: unknown): string {
+  if (typeof v === 'string') {
+    const t = v.trim().replace(/^0x/i, '');
+    if (/^[0-9a-fA-F]+$/u.test(t)) return t.toLowerCase();
+    throw new Error(`LockDatum bytes field is not hex: ${v.slice(0, 40)}${v.length > 40 ? '…' : ''}`);
+  }
+  if (v && typeof v === 'object' && 'bytes' in v) {
+    const b = String((v as { bytes: string }).bytes).trim().replace(/^0x/i, '');
+    if (!/^[0-9a-fA-F]+$/u.test(b)) throw new Error('LockDatum { bytes } is not hex');
+    return b.toLowerCase();
+  }
+  throw new Error(`LockDatum expected Plutus bytes (string hex or { bytes }), got ${typeof v}`);
+}
+
 export function parseLockDatumFromMeshData(d: Data): LockDatumParams {
-  const root = d as unknown as { alternative: number; fields: Data[] };
+  const root = d as unknown as { alternative?: number; constructor?: number; fields: Data[] };
   const f = root.fields;
   if (!Array.isArray(f) || f.length < 10) {
     throw new Error('Unexpected LockDatum shape from chain');
   }
-  const opField = f[9] as unknown as { alternative: number; fields: Data[] };
+  const opField = f[9] as unknown as { alternative?: number; constructor?: number; fields?: Data[] };
+  const opIx = meshConstrIndex(opField);
+  const opFields = opField.fields ?? [];
   let bridgeOperatorVkeyHashHex56: string | null = null;
-  if (opField.alternative === 0 && opField.fields?.length === 1) {
-    bridgeOperatorVkeyHashHex56 = String(opField.fields[0]);
-  } else if (opField.alternative === 1) {
+  if (opIx === 0 && opFields.length === 1) {
+    bridgeOperatorVkeyHashHex56 = meshPlutusBytesToHex(opFields[0]);
+  } else if (opIx === 1) {
     bridgeOperatorVkeyHashHex56 = null;
   } else {
     throw new Error('Unexpected bridge_operator option in LockDatum');
   }
   return {
-    depositorVkeyHashHex56: String(f[0]),
-    recipientVkeyHashHex56: String(f[1]),
-    policyIdHex: String(f[2]),
-    assetNameHex: String(f[3]),
+    depositorVkeyHashHex56: meshPlutusBytesToHex(f[0]),
+    recipientVkeyHashHex56: meshPlutusBytesToHex(f[1]),
+    policyIdHex: meshPlutusBytesToHex(f[2]),
+    assetNameHex: meshPlutusBytesToHex(f[3]),
     amount: meshPlutusIntegerToBigInt(f[4], 'amount'),
     lockNonce: meshPlutusIntegerToBigInt(f[5], 'lockNonce'),
-    recipientCommitmentHex: String(f[6]),
+    recipientCommitmentHex: meshPlutusBytesToHex(f[6]),
     sourceChainId: meshPlutusIntegerToBigInt(f[7], 'sourceChainId'),
     destinationChainId: meshPlutusIntegerToBigInt(f[8], 'destinationChainId'),
     bridgeOperatorVkeyHashHex56,

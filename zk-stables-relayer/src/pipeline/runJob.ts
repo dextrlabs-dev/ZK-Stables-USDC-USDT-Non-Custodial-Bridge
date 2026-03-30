@@ -32,9 +32,10 @@ import {
   releaseCardanoUtxo,
   reserveCardanoUtxo,
   reserveBurnCommitment,
+  releaseBurnCommitment,
 } from '../store.js';
 import type { BridgeDedupeKeys } from './dedupe.js';
-import { bridgeDedupeKeysFromIntent } from './dedupe.js';
+import { bridgeDedupeKeysFromIntent, findExistingJobForEvmDedupeKey } from './dedupe.js';
 import { waitCardanoConfirmations, waitCardanoConfirmationsYaci } from '../adapters/cardanoFinality.js';
 import {
   blockfrostNetwork,
@@ -43,7 +44,12 @@ import {
   resolveYaciBaseUrl,
 } from '../adapters/cardanoIndexer.js';
 import type { Logger } from 'pino';
-import { isMidnightBridgeEnabled, runMidnightMintPipeline, runMidnightBurnPipeline } from '../midnight/service.js';
+import {
+  ensureMidnightRelayer,
+  isMidnightBridgeEnabled,
+  runMidnightBurnPipeline,
+  runMidnightMintPipeline,
+} from '../midnight/service.js';
 import type { MintPipelineArgs, BurnPipelineArgs } from '../midnight/service.js';
 import { holderLedgerPublicKey } from '../midnight/holder-key.js';
 import { AssetKind } from '@zk-stables/midnight-contract';
@@ -96,12 +102,14 @@ function buildMintPipelineArgs(intent: BridgeIntent, lockRef: string): MintPipel
 }
 
 function buildBurnPipelineArgs(intent: BridgeIntent): BurnPipelineArgs | null {
-  if (intent.operation !== 'BURN') return null;
+  if (intent.operation !== 'BURN' || intent.sourceChain !== 'midnight') return null;
   const bc = intent.burnCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase();
   if (!bc || bc.length !== 64 || !/^[0-9a-f]+$/u.test(bc)) return null;
-  const depositCommitment = hexToBytes32(bc);
-  const destChainId = BigInt(intent.source?.midnight?.destChainId ?? 2);
   const recipientCommitment = hexToBytes32(bc);
+  const destChainId = BigInt(intent.source?.midnight?.destChainId ?? 2);
+  const depHex = intent.source?.midnight?.depositCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase();
+  if (!depHex || depHex.length !== 64 || !/^[0-9a-f]+$/u.test(depHex)) return null;
+  const depositCommitment = hexToBytes32(depHex);
   return { depositCommitment, destChainId, recipientCommitment };
 }
 
@@ -189,6 +197,14 @@ function cardanoBurnReleasePayoutBech32(intent: BridgeIntent): string {
 export async function enqueueLockIntent(logger: Logger, intent: BridgeIntent): Promise<RelayerJob | null> {
   const keys = bridgeDedupeKeysFromIntent(intent);
   if (keys.evm && !reserveEvmEvent(keys.evm)) {
+    const existing = findExistingJobForEvmDedupeKey(keys.evm);
+    if (existing) {
+      logger.info(
+        { dedupeKey: keys.evm, jobId: existing.id, phase: existing.phase },
+        'idempotent lock: same EVM tx+log as existing job (watcher or replay)',
+      );
+      return existing;
+    }
     logger.info({ dedupeKey: keys.evm }, 'skip duplicate evm event');
     return null;
   }
@@ -225,8 +241,25 @@ export async function enqueueLockIntent(logger: Logger, intent: BridgeIntent): P
 
 async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): Promise<void> {
   try {
-    const job = getJob(id);
-    if (!job) return;
+    await runPipelineInner(logger, id, keys);
+  } catch (e) {
+    if (keys.burnCommitment) {
+      releaseBurnCommitment(keys.burnCommitment);
+      logger.warn(
+        { id, burnCommitment: keys.burnCommitment },
+        'pipeline failed: released burn commitment reservation (intent may be retried; on-chain burn nonce not consumed unless EVM unlock already ran)',
+      );
+    }
+    throw e;
+  } finally {
+    if (keys.evm) releaseEvmEvent(keys.evm);
+    if (keys.cardano) releaseCardanoUtxo(keys.cardano);
+  }
+}
+
+async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKeys): Promise<void> {
+  const job = getJob(id);
+  if (!job) return;
 
     patchJob(id, { phase: 'awaiting_finality' });
     const rpcUrl = process.env.RELAYER_EVM_RPC_URL ?? 'http://127.0.0.1:8545';
@@ -323,7 +356,7 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
     });
     logger.info({ id, digest: proofBundle.digest, depositCommitmentHex }, 'destination_handoff');
 
-    // BURN, Cardano source, non-Cardano destination: optional operator `BridgeRelease`, or user already spent (spendTxHash).
+    // BURN, Cardano source, non-Cardano destination: operator `BridgeRelease` and/or user `spendTxHash` must clear lock_pool (zk destroyed / moved on-chain) before job completion.
     if (
       job.intent.operation === 'BURN' &&
       job.intent.sourceChain === 'cardano' &&
@@ -334,6 +367,7 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       const src = job.intent.source?.cardano;
       const userReleased = Boolean(src?.spendTxHash?.trim());
       const operatorMayRelease = process.env.RELAYER_CARDANO_OPERATOR_BURN_RELEASE === 'true';
+
       if (userReleased) {
         logger.info(
           { id, spendTxHash: src?.spendTxHash },
@@ -343,7 +377,15 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
         patchJob(id, {
           destinationHint: `${j?.destinationHint ?? hint}\nUser BridgeRelease tx: ${src!.spendTxHash}`,
         });
-      } else if (bridge && src?.txHash !== undefined && src.outputIndex !== undefined && operatorMayRelease) {
+      } else if (!src?.txHash || src.outputIndex === undefined) {
+        throw new Error(
+          'Cardano BURN: intent.source.cardano.txHash and outputIndex are required so the relayer can spend lock_pool or verify spendTxHash',
+        );
+      } else if (!bridge) {
+        throw new Error(
+          'Cardano BURN: operator bridge wallet not available; configure RELAYER_CARDANO_WALLET_MNEMONIC (+ Plutus/collateral) or submit source.cardano.spendTxHash after user BridgeRelease',
+        );
+      } else if (operatorMayRelease) {
         try {
           const payout = cardanoBurnReleasePayoutBech32(job.intent);
           const { detail } = await bridgeReleaseLockUtxo({
@@ -351,6 +393,11 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
             lockOutputIndex: src.outputIndex,
             payoutBech32: payout,
             logger,
+            releaseMode:
+              process.env.RELAYER_CARDANO_OPERATOR_BURN_RELEASE_TRANSFER_LEGACY === 'true' ||
+              process.env.RELAYER_CARDANO_OPERATOR_BURN_RELEASE_TRANSFER_LEGACY === '1'
+                ? 'transfer'
+                : 'burn',
           });
           const j = getJob(id);
           patchJob(id, {
@@ -360,15 +407,9 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
           logger.error({ err: e, id }, 'cardano lock release failed');
           throw e;
         }
-      } else if (bridge && src?.txHash !== undefined && src.outputIndex !== undefined && !operatorMayRelease) {
-        logger.info(
-          { id },
-          'cardano BURN: operator BridgeRelease disabled (set RELAYER_CARDANO_OPERATOR_BURN_RELEASE=true for legacy); user must sign BridgeRelease then set source.cardano.spendTxHash',
-        );
-      } else if (bridge && (!src?.txHash || src.outputIndex === undefined)) {
-        logger.warn(
-          { id },
-          'cardano BURN release skipped: intent.source.cardano.txHash / outputIndex required for lock_pool spend',
+      } else {
+        throw new Error(
+          'Cardano BURN: zk remains at lock_pool until BridgeRelease — set RELAYER_CARDANO_OPERATOR_BURN_RELEASE=true for operator spend, or sign BridgeRelease and POST source.cardano.spendTxHash before confirming the relayer job',
         );
       }
     }
@@ -605,25 +646,45 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
       }
     }
 
-    // BURN from Midnight: finalizeBurn on registry contract after user initiateBurn.
-    if (
-      job.intent.operation === 'BURN' &&
-      job.intent.sourceChain === 'midnight' &&
-      isMidnightBridgeEnabled()
-    ) {
-      const burnArgs = buildBurnPipelineArgs(job.intent);
-      if (burnArgs) {
-        try {
-          const extra = await runMidnightBurnPipeline(logger, burnArgs);
-          const j = getJob(id);
-          const prev = j?.destinationHint ?? hint;
-          patchJob(id, {
-            destinationHint: extra ? `${prev}\n\n--- Midnight finalizeBurn ---\n${extra}` : prev,
-          });
-        } catch (e) {
-          logger.error({ err: e, id }, 'midnight burn pipeline failed');
-          throw e;
+    // BURN from Midnight: relayer must run registry finalizeBurn (on-chain destruction); never complete the job without it.
+    if (job.intent.operation === 'BURN' && job.intent.sourceChain === 'midnight') {
+      if (!isMidnightBridgeEnabled()) {
+        throw new Error(
+          'Midnight BURN requires RELAYER_MIDNIGHT_ENABLED=true so the relayer can run sendWrappedUnshieldedToUser + finalizeBurn on zk-stables-registry',
+        );
+      }
+      const relMid = await ensureMidnightRelayer(logger);
+      if (!relMid) {
+        throw new Error(
+          'Midnight BURN: relayer could not join the registry (set RELAYER_MIDNIGHT_CONTRACT_ADDRESS or deploy flags + wallet seed)',
+        );
+      }
+      const intentContract = job.intent.source?.midnight?.contractAddress?.trim();
+      if (intentContract) {
+        const ic = intentContract.replace(/^0x/i, '').toLowerCase();
+        const rc = relMid.contractAddress.replace(/^0x/i, '').toLowerCase();
+        if (ic !== rc) {
+          throw new Error(
+            `Midnight BURN: UI intent contract (${intentContract}) does not match relayer RELAYER_MIDNIGHT_CONTRACT_ADDRESS (${relMid.contractAddress}). The relayer only sees ledger rows on its joined instance — set the env var to your UI’s Join/Deploy address and restart the relayer.`,
+          );
         }
+      }
+      const burnArgs = buildBurnPipelineArgs(job.intent);
+      if (!burnArgs) {
+        throw new Error(
+          'Midnight BURN: need burnCommitmentHex (64 hex, recipientComm) and source.midnight.depositCommitmentHex (64 hex, ledger ticket) — relayer cannot finalize using recipientComm as deposit key',
+        );
+      }
+      try {
+        const extra = await runMidnightBurnPipeline(logger, burnArgs);
+        const j = getJob(id);
+        const prev = j?.destinationHint ?? hint;
+        patchJob(id, {
+          destinationHint: extra ? `${prev}\n\n--- Midnight finalizeBurn ---\n${extra}` : prev,
+        });
+      } catch (e) {
+        logger.error({ err: e, id }, 'midnight burn pipeline failed');
+        throw e;
       }
     }
 
@@ -632,8 +693,6 @@ async function runPipeline(logger: Logger, id: string, keys: BridgeDedupeKeys): 
     patchJob(id, { phase: 'completed' });
     logger.info({ id }, 'completed');
     if (keys.cardano) markCardanoUtxoProcessed(keys.cardano);
-  } finally {
-    if (keys.evm) releaseEvmEvent(keys.evm);
-    if (keys.cardano) releaseCardanoUtxo(keys.cardano);
-  }
+    /** Same `Locked` log must not enqueue a second pipeline after HTTP replay or watcher + UI confirm. */
+    if (keys.evm) markEvmEventProcessed(keys.evm);
 }

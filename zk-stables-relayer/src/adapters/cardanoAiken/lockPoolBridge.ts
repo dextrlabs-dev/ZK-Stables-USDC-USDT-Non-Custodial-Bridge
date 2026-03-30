@@ -13,7 +13,11 @@ import {
 import type { Asset, Data, IEvaluator, IFetcher, ISubmitter, UTxO } from '@meshsdk/common';
 import type { Logger } from 'pino';
 import { parseDecimalAmountToUnits } from '../amount.js';
-import { ensureCardanoBridgeWallet, cardanoRecipientMatchesNetwork } from '../cardanoPayout.js';
+import {
+  assertBridgeWalletMinLovelace,
+  ensureCardanoBridgeWallet,
+  cardanoRecipientMatchesNetwork,
+} from '../cardanoPayout.js';
 import { cardanoBridgeTokenName } from '../cardanoMintPayout.js';
 import { loadBlueprint } from './blueprint.js';
 import { parseLockDatumFromMeshData } from './cardanoLockDatum.js';
@@ -94,6 +98,18 @@ export async function lockMintThenBridgeRelease(params: {
   const lovelaceOut = BigInt(process.env.RELAYER_CARDANO_PAYOUT_LOVELACE ?? '3000000');
   const minAda = BigInt(process.env.RELAYER_CARDANO_MINT_OUTPUT_LOVELACE ?? '2000000');
   const adaStr = (lovelaceOut > minAda ? lovelaceOut : minAda).toString();
+
+  const envPref = process.env.RELAYER_CARDANO_PREFLIGHT_MIN_LOVELACE?.trim();
+  const minWalletLovelace =
+    envPref && /^[0-9]+$/u.test(envPref)
+      ? BigInt(envPref)
+      : (lovelaceOut > minAda ? lovelaceOut : minAda) + 3_500_000n;
+  await assertBridgeWalletMinLovelace({
+    wallet,
+    minLovelace: minWalletLovelace,
+    changeAddress: change,
+    logger: params.logger,
+  });
 
   const tokenAscii = cardanoBridgeTokenName(params.asset);
   const forgingScript = ForgeScript.withOneSignature(change);
@@ -246,6 +262,18 @@ export async function lockMintHoldAtScriptOnly(params: {
   const minAda = BigInt(process.env.RELAYER_CARDANO_MINT_OUTPUT_LOVELACE ?? '2000000');
   const adaStr = (lovelaceOut > minAda ? lovelaceOut : minAda).toString();
 
+  const envPref = process.env.RELAYER_CARDANO_PREFLIGHT_MIN_LOVELACE?.trim();
+  const minWalletLovelace =
+    envPref && /^[0-9]+$/u.test(envPref)
+      ? BigInt(envPref)
+      : (lovelaceOut > minAda ? lovelaceOut : minAda) + 3_500_000n;
+  await assertBridgeWalletMinLovelace({
+    wallet,
+    minLovelace: minWalletLovelace,
+    changeAddress: change,
+    logger: params.logger,
+  });
+
   const tokenAscii = cardanoBridgeTokenName(params.asset);
   const forgingScript = ForgeScript.withOneSignature(change);
   const policyId = resolveScriptHash(forgingScript);
@@ -322,6 +350,12 @@ export async function bridgeReleaseLockUtxo(params: {
   lockOutputIndex: number;
   payoutBech32: string;
   logger: Logger;
+  /**
+   * `burn` (default): redeem semantics — synthetic zk is removed from circulation via negative mint;
+   * payout receives only lovelace (and any non-bridge assets) from the lock output.
+   * `transfer`: legacy — full script value (including zk) is sent to `payoutBech32`.
+   */
+  releaseMode?: 'burn' | 'transfer';
 }): Promise<{ txHash: string; detail: string }> {
   const ctx = await ensureCardanoBridgeWallet(params.logger);
   if (!ctx) throw new Error('Cardano bridge wallet not configured');
@@ -366,13 +400,17 @@ export async function bridgeReleaseLockUtxo(params: {
       ? datumParams.recipientVkeyHashHex56
       : datumParams.bridgeOperatorVkeyHashHex56;
 
+  const releaseMode = params.releaseMode ?? 'burn';
+  const forgingScript = ForgeScript.withOneSignature(change);
+  const forgingPolicyId = resolveScriptHash(forgingScript);
+
   const txB = new MeshTxBuilder({
     fetcher,
     submitter: fetcher,
     evaluator: fetcher as unknown as IEvaluator,
   });
 
-  await txB
+  const spendHead = txB
     .spendingPlutusScript('V3')
     .txIn(
       scriptUtxo.input.txHash,
@@ -383,26 +421,68 @@ export async function bridgeReleaseLockUtxo(params: {
     .txInScript(scriptCbor)
     .txInRedeemerValue(redeemerBridgeRelease)
     .txInInlineDatumPresent()
-    .requiredSignerHash(signerHash)
-    .txOut(payout, scriptUtxo.output.amount)
-    .changeAddress(walletUsed)
-    .txInCollateral(
-      collateral.input.txHash,
-      collateral.input.outputIndex,
-      collateral.output.amount,
-      collateral.output.address,
-    )
-    .selectUtxosFrom(utxos)
-    .setNetwork(meshNetwork)
-    .complete();
+    .requiredSignerHash(signerHash);
+
+  if (releaseMode === 'transfer') {
+    await spendHead
+      .txOut(payout, scriptUtxo.output.amount)
+      .changeAddress(walletUsed)
+      .txInCollateral(
+        collateral.input.txHash,
+        collateral.input.outputIndex,
+        collateral.output.amount,
+        collateral.output.address,
+      )
+      .selectUtxosFrom(utxos)
+      .setNetwork(meshNetwork)
+      .complete();
+  } else {
+    if (datumParams.policyIdHex !== forgingPolicyId) {
+      throw new Error(
+        `Lock datum forging policy does not match bridge wallet policy — cannot burn (datum ${datumParams.policyIdHex.slice(0, 14)}… vs wallet ${forgingPolicyId.slice(0, 14)}…)`,
+      );
+    }
+    const bridgeUnit = `${datumParams.policyIdHex}${datumParams.assetNameHex}`;
+    const bridgeRow = scriptUtxo.output.amount.find((a) => a.unit === bridgeUnit);
+    if (!bridgeRow) {
+      throw new Error(
+        `Lock UTxO has no synthetic asset ${bridgeUnit.slice(0, 20)}… (expected from datum); cannot BridgeRelease+burn`,
+      );
+    }
+    const burnQty = BigInt(String(bridgeRow.quantity));
+    if (burnQty <= 0n) throw new Error('BridgeRelease+burn: synthetic quantity must be positive');
+
+    const payoutAssets: Asset[] = scriptUtxo.output.amount
+      .filter((a) => a.unit !== bridgeUnit)
+      .map((a) => ({ unit: a.unit, quantity: String(a.quantity) }));
+    if (payoutAssets.length === 0) {
+      throw new Error('BridgeRelease+burn: no outputs left after stripping synthetic (lock UTxO must carry lovelace)');
+    }
+
+    await spendHead
+      .txOut(payout, payoutAssets)
+      .mint(`-${burnQty.toString()}`, datumParams.policyIdHex, datumParams.assetNameHex)
+      .mintingScript(forgingScript)
+      .changeAddress(walletUsed)
+      .txInCollateral(
+        collateral.input.txHash,
+        collateral.input.outputIndex,
+        collateral.output.amount,
+        collateral.output.address,
+      )
+      .selectUtxosFrom(utxos)
+      .setNetwork(meshNetwork)
+      .complete();
+  }
 
   const unsigned = txB.txHex;
   const signed = await wallet.signTx(unsigned);
   const txHash = await wallet.submitTx(signed);
   if (!txHash) throw new Error('submitTx returned empty');
-  return {
-    txHash,
-    detail: `Aiken lock_pool BridgeRelease: ${txHash}`,
-  };
+  const detail =
+    releaseMode === 'burn'
+      ? `Aiken lock_pool BridgeRelease+burn (supply): ${txHash}`
+      : `Aiken lock_pool BridgeRelease: ${txHash}`;
+  return { txHash, detail };
 }
 

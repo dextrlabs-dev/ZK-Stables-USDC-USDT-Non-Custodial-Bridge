@@ -21,6 +21,7 @@ import { BehaviorSubject, type Subscription, filter, firstValueFrom, interval, m
 import * as ZkStablesRegistry from '@contract/zk-stables-registry';
 import { zkStablesRegistryWitnesses, type ZkStablesRegistryPrivateState } from '@contract/witnesses-zk-stables-registry';
 import { zkStablesRegistryPrivateStateId, AssetKind } from '../constants/zk-stables.js';
+import { REGISTRY_DEPOSIT_STATUS_BURNED } from '../constants/registryDepositStatus.js';
 import type { PublicDataProvider } from '@midnight-ntwrk/midnight-js-types';
 import { hexToBytes32, uint8ArrayToHex } from '../utils/hex.js';
 import { userAddressStructFromInput } from '../utils/userAddress.js';
@@ -29,6 +30,7 @@ import { withTimeout } from '../utils/withTimeout.js';
 import { toError } from '../utils/toError.js';
 import { initDevWalletFromSeedHash, type DevSeedWalletContext } from '../midnight/devSeedWallet.js';
 import { formatShieldedAddressForDisplay } from '../utils/shieldedAddressDisplay.js';
+import { formatMidnightTxFailureForUser } from '../utils/midnightSubmitErrors.js';
 
 const NETWORK_ID = (import.meta.env.VITE_NETWORK_ID || 'undeployed') as string;
 
@@ -77,7 +79,7 @@ export type LedgerView = {
   bridgeOperatorHex: string;
   /** Per-deposit entries from the registry maps. */
   deposits: RegistryDepositEntry[];
-  /** Total registered deposits. */
+  /** Deposits still in circulation (Burned omitted — finalized burns no longer count as live positions). */
   depositCount: number;
 };
 
@@ -85,7 +87,7 @@ function registryStatusLabel(status: number): string {
   switch (status) {
     case 1: return 'Active';
     case 2: return 'ExitPending';
-    case 3: return 'Burned';
+    case REGISTRY_DEPOSIT_STATUS_BURNED: return 'Burned';
     default: return `Unknown(${status})`;
   }
 }
@@ -195,6 +197,8 @@ export type ZkStablesContextValue = {
     txId: string;
     txHash: string;
     recipientCommHex64: string;
+    /** Registry ledger row key (same bytes as `initiateBurn` arg1) — distinct from `recipientCommHex64`. */
+    depositCommitmentHex64: string;
     destChain: string;
     contractAddress: string | null;
   } | null;
@@ -237,7 +241,9 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
     operatorSkHex: '01'.repeat(32),
     holderSkHex: '02'.repeat(32),
   });
-  const [joinAddress, setJoinAddress] = useState('');
+  const [joinAddress, setJoinAddress] = useState(
+    () => String(import.meta.env.VITE_DEFAULT_MIDNIGHT_JOIN_ADDRESS ?? '').trim(),
+  );
   const [burnDestChain, setBurnDestChain] = useState('2');
   const [recipientCommHex, setRecipientCommHex] = useState('aa'.repeat(32));
   const [sendToAddressInput, setSendToAddressInput] = useState('');
@@ -656,7 +662,7 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
       setLedger({
         bridgeOperatorHex: uint8ArrayToHex(L.bridgeOperator),
         deposits,
-        depositCount: deposits.length,
+        depositCount: deposits.filter((d) => d.status !== REGISTRY_DEPOSIT_STATUS_BURNED).length,
       });
     } catch (e) {
       logger.warn({ e }, 'refreshLedger failed');
@@ -830,10 +836,14 @@ export const ZkStablesProvider: React.FC<ZkStablesProviderProps> = ({ logger, ch
           txId: String(r.public.txId),
           txHash: String(r.public.txHash),
           recipientCommHex64: uint8ArrayToHex(comm).toLowerCase(),
+          depositCommitmentHex64: uint8ArrayToHex(dep).toLowerCase(),
           destChain: destStr,
           contractAddress: contractAddress ? String(contractAddress) : null,
         });
         await refreshLedger();
+      } catch (e) {
+        const detail = formatMidnightTxFailureForUser(serializeThrown(e), 'initiateBurn');
+        throw new Error(detail);
       } finally {
         setFlowMessage(undefined);
       }

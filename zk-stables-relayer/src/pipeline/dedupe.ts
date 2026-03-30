@@ -1,5 +1,5 @@
-import type { BridgeIntent, BurnIntent } from '../types.js';
-import { cardanoUtxoDedupeKey, evmEventDedupeKey } from '../store.js';
+import type { BridgeIntent, BurnIntent, RelayerJob } from '../types.js';
+import { cardanoUtxoDedupeKey, evmEventDedupeKey, listJobs } from '../store.js';
 
 export function evmDedupeKeyFromIntent(intent: BridgeIntent): string | undefined {
   const tx = intent.source?.evm?.txHash;
@@ -29,4 +29,13 @@ export function bridgeDedupeKeysFromIntent(intent: BridgeIntent): BridgeDedupeKe
     cardano: cardanoDedupeKeyFromIntent(intent),
     burnCommitment: burnCommitmentDedupeKey(intent),
   };
+}
+
+/** Same anchor as `RELAYER_EVM_LOCK_ADDRESS` watcher — HTTP confirm replays must resolve to this job, not 409. */
+export function findExistingJobForEvmDedupeKey(key: string): RelayerJob | undefined {
+  for (const j of listJobs()) {
+    const k = evmDedupeKeyFromIntent(j.intent);
+    if (k === key) return j;
+  }
+  return undefined;
 }

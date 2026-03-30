@@ -37,6 +37,30 @@ wait_port () {
   return 1
 }
 
+# True if addr looks like 0x + 20 bytes and eth_getCode is non-empty (stale deploy JSON vs reset Anvil).
+rpc_evm_has_contract_bytecode () {
+  local addr="$1"
+  local rpc="${RELAYER_EVM_RPC_URL:-http://127.0.0.1:8545}"
+  [[ "$addr" =~ ^0x[0-9a-fA-F]{40}$ ]] || return 1
+  local code
+  if command -v cast >/dev/null 2>&1; then
+    code=$(cast code "$addr" --rpc-url "$rpc" 2>/dev/null || echo "0x")
+  else
+    code=$(curl -sS -X POST -H "Content-Type: application/json" \
+      --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getCode\",\"params\":[\"$addr\",\"latest\"],\"id\":1}" \
+      "$rpc" | jq -r '.result // empty' 2>/dev/null || echo "")
+  fi
+  [[ -n "$code" && "$code" != "0x" ]]
+}
+
+anvil_addrs_json_matches_chain () {
+  local json="$1"
+  local usdc pool
+  usdc=$(jq -r .usdc "$json")
+  pool=$(jq -r .poolLock "$json")
+  rpc_evm_has_contract_bytecode "$usdc" && rpc_evm_has_contract_bytecode "$pool"
+}
+
 echo "[stop] Relayer :${RELAYER_PORT_VAL}, UI :${VITE_PORT}"
 if [[ -f "$RELAYER_PID_FILE" ]]; then
   kill "$(cat "$RELAYER_PID_FILE")" 2>/dev/null || true
@@ -57,12 +81,16 @@ echo "[relayer] Starting on :${RELAYER_PORT_VAL} (log $RELAYER_LOG)…"
   source "$ROOT/zk-stables-relayer/.env"
   set +a
   if [[ -f "$ADDRS_JSON" ]] && jq -e . "$ADDRS_JSON" >/dev/null 2>&1; then
-    export RELAYER_EVM_LOCK_ADDRESS="$(jq -r .poolLock "$ADDRS_JSON")"
-    export RELAYER_EVM_POOL_LOCK="$(jq -r .poolLock "$ADDRS_JSON")"
-    export RELAYER_EVM_WRAPPED_TOKEN="$(jq -r .wUSDC "$ADDRS_JSON")"
-    export RELAYER_EVM_UNDERLYING_TOKEN="$(jq -r .usdc "$ADDRS_JSON")"
-    export RELAYER_EVM_BRIDGE_MINT="$(jq -r .bridgeMint "$ADDRS_JSON")"
-    echo "[relayer] EVM addresses from $ADDRS_JSON"
+    if anvil_addrs_json_matches_chain "$ADDRS_JSON"; then
+      export RELAYER_EVM_LOCK_ADDRESS="$(jq -r .poolLock "$ADDRS_JSON")"
+      export RELAYER_EVM_POOL_LOCK="$(jq -r .poolLock "$ADDRS_JSON")"
+      export RELAYER_EVM_WRAPPED_TOKEN="$(jq -r .wUSDC "$ADDRS_JSON")"
+      export RELAYER_EVM_UNDERLYING_TOKEN="$(jq -r .usdc "$ADDRS_JSON")"
+      export RELAYER_EVM_BRIDGE_MINT="$(jq -r .bridgeMint "$ADDRS_JSON")"
+      echo "[relayer] EVM addresses from $ADDRS_JSON (usdc + poolLock have bytecode on ${RELAYER_EVM_RPC_URL:-http://127.0.0.1:8545})"
+    else
+      echo "[relayer] WARN: $ADDRS_JSON does not match chain (usdc/poolLock empty on ${RELAYER_EVM_RPC_URL:-http://127.0.0.1:8545}) — using zk-stables-relayer/.env only. Remove stale JSON or run ./scripts/start-local-stack.sh to redeploy."
+    fi
   else
     echo "[relayer] No valid $ADDRS_JSON — using zk-stables-relayer/.env only (run start-local-stack.sh once if Anvil addresses drift)"
   fi

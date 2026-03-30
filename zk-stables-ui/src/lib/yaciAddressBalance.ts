@@ -1,8 +1,17 @@
 import type { UTxO } from '@meshsdk/common';
 import { cardanoNativeUnitsEquivalent } from '../cardano/cardanoNativeUnitMatch.js';
 
-/** Avoid HTTP disk cache serving a stale 503 from when Yaci was down (same URL as a later success). */
-const yaciFetchInit: RequestInit = { cache: 'no-store' };
+/**
+ * Avoid stale reads after burns/mints: no HTTP cache, plus cache-control headers for intermediaries.
+ * (Some browsers still revalidate aggressively; `no-store` is the primary fix.)
+ */
+const yaciFetchInit: RequestInit = {
+  cache: 'no-store',
+  headers: {
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    Pragma: 'no-cache',
+  },
+};
 
 async function readYaciErrorBody(r: Response): Promise<string> {
   try {

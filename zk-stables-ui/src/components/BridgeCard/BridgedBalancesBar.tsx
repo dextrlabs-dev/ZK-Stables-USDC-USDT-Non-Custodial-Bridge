@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection } from 'wagmi';
-import type { Address } from 'viem';
+import { formatUnits, type Address } from 'viem';
 import {
   fetchBridgedWrappedBalances,
   fetchNativeEthBalance,
@@ -14,9 +14,11 @@ import {
   resolveYaciStoreBaseUrl,
 } from '../../lib/yaciAddressBalance.js';
 import { useZkStables } from '../../hooks/useZkStables.js';
+import { useCrossChainWallets } from '../../contexts/CrossChainWalletContext.js';
 import type { DemoWalletsResponse } from '../../lib/relayerClient.js';
 import { defaultRelayerBaseUrl, fetchMidnightContract } from '../../lib/relayerClient.js';
 import { shortenAddress } from '../../utils/formatAddress.js';
+import { REGISTRY_DEPOSIT_STATUS_BURNED } from '../../constants/registryDepositStatus.js';
 
 async function deriveHex32FromGenesis(seedHex: string, label: string): Promise<string> {
   const input = `${label}:${seedHex.trim().replace(/^0x/, '').toLowerCase()}`;
@@ -33,10 +35,56 @@ function fmtBal(s: string | undefined): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
-/** Display bigint bridge amount from zk-stables public ledger (circuit-updated state). */
+/** Thousands separators for bigints (regex grouping can look odd with `break-all`). */
 function fmtLedgerAmount(n: bigint): string {
-  const s = n.toString();
-  return s.replace(/\B(?=(\d{3})+(?!\d))/gu, ',');
+  let s = n.toString();
+  const neg = s.startsWith('-');
+  if (neg) s = s.slice(1);
+  const parts: string[] = [];
+  while (s.length > 3) {
+    parts.unshift(s.slice(-3));
+    s = s.slice(0, -3);
+  }
+  if (s) parts.unshift(s);
+  return (neg ? '-' : '') + parts.join(',');
+}
+
+/** zkUSDC / zkUSDT on Midnight use 6 fixed decimals (micro-units). */
+const ZK_LEDGER_MICRO_DECIMALS = 6;
+
+/** Human-readable amount from atomic bigint (e.g. 451000000 + 6 decimals → "451"). */
+function formatHumanAtomicUnits(raw: bigint, decimals: number): string {
+  if (decimals < 0 || decimals > 36) return raw.toString();
+  if (raw === 0n) return '0';
+  const s = formatUnits(raw, decimals);
+  const neg = s.startsWith('-');
+  const t = neg ? s.slice(1) : s;
+  const [whole, frac = ''] = t.split('.');
+  const intFmt = BigInt(whole).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const fracTrim = frac.replace(/0+$/, '');
+  if (!fracTrim) return (neg ? '-' : '') + intFmt;
+  return (neg ? '-' : '') + `${intFmt}.${fracTrim}`;
+}
+
+function formatZkMicroTokenUnits(raw: bigint): string {
+  return formatHumanAtomicUnits(raw, ZK_LEDGER_MICRO_DECIMALS);
+}
+
+/** Yaci returns native token quantity as a decimal string of atomics — same 6dp as bridge zk. */
+function formatCardanoNativeZkDisplay(raw: string | undefined, decimals: number): string {
+  if (raw === undefined || !String(raw).trim()) return '—';
+  const t = String(raw).trim().replace(/\s/gu, '').split('.')[0] ?? '';
+  if (!t || !/^-?\d+$/u.test(t)) return raw;
+  try {
+    return formatHumanAtomicUnits(BigInt(t), decimals);
+  } catch {
+    return raw;
+  }
+}
+
+/** Long unshielded amounts: scroll horizontally inside the cell instead of breaking digits. */
+function midnightBalClassName(): string {
+  return 'mt-0.5 max-w-full overflow-x-auto whitespace-nowrap text-right text-base font-semibold tabular-nums tracking-tight text-slate-900';
 }
 
 export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ demo }) => {
@@ -63,8 +111,17 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
   const fallback = demo.evm.accounts[0]?.address as Address | undefined;
   const account = (connected ?? fallback) as Address | undefined;
 
-  const cardanoSource = demo.cardano.addresses.find((a) => a.role === 'source')?.bech32?.trim() ?? '';
-  const cardanoDest = demo.cardano.addresses.find((a) => a.role === 'destination')?.bech32?.trim() ?? '';
+  const { cardanoMeshChangeBech32 } = useCrossChainWallets();
+
+  const relayerCardanoSrc = demo.cardano.addresses.find((a) => a.role === 'source')?.bech32?.trim() ?? '';
+  const relayerCardanoDst = demo.cardano.addresses.find((a) => a.role === 'destination')?.bech32?.trim() ?? '';
+  /**
+   * Relayer `GET /v1/demo/wallets` bech32 often ≠ Mesh `getChangeAddress()` for the same mnemonic.
+   * Yaci balances for redeem/burn must follow the address you actually sign with, or totals never move.
+   */
+  const cardanoSource = (cardanoMeshChangeBech32?.trim() || relayerCardanoSrc).trim();
+  const cardanoDest = (cardanoMeshChangeBech32?.trim() || relayerCardanoDst).trim();
+  const cardanoBalanceFollowsMeshChange = Boolean(cardanoMeshChangeBech32?.trim());
   const yaciBase = resolveYaciStoreBaseUrl();
   const cardanoNativeDecimals = Math.min(
     18,
@@ -236,6 +293,7 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
     usdt,
     cardanoSource,
     cardanoDest,
+    cardanoMeshChangeBech32,
     yaciBase,
     cardWusdcUnit,
     cardWusdtUnit,
@@ -248,8 +306,17 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
   }, [load]);
 
   useEffect(() => {
-    const id = window.setInterval(() => setRefreshKey((k) => k + 1), 12_000);
+    const ms = yaciBase ? 5_000 : 12_000;
+    const id = window.setInterval(() => setRefreshKey((k) => k + 1), ms);
     return () => window.clearInterval(id);
+  }, [yaciBase]);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible') setRefreshKey((k) => k + 1);
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
 
   useEffect(() => {
@@ -349,7 +416,35 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
     return native.reduce((sum, e) => sum + e.amount, 0n);
   }, [midnightTokenEntries]);
 
-  
+  /** Contract ledger amounts (6 decimals) — these move to “Wallet · zk*” only after `sendWrappedUnshieldedToUser`. Burned rows are excluded. */
+  const registryUsdcSum = useMemo(() => {
+    if (!ledger?.deposits.length) return 0n;
+    return ledger.deposits
+      .filter((d) => d.status !== REGISTRY_DEPOSIT_STATUS_BURNED && d.assetKind === 0)
+      .reduce((s, d) => {
+        const a = d.amount;
+        const bi = typeof a === 'bigint' ? a : BigInt(String(a ?? '0'));
+        return s + bi;
+      }, 0n);
+  }, [ledger]);
+  const registryUsdtSum = useMemo(() => {
+    if (!ledger?.deposits.length) return 0n;
+    return ledger.deposits
+      .filter((d) => d.status !== REGISTRY_DEPOSIT_STATUS_BURNED && d.assetKind === 1)
+      .reduce((s, d) => {
+        const a = d.amount;
+        const bi = typeof a === 'bigint' ? a : BigInt(String(a ?? '0'));
+        return s + bi;
+      }, 0n);
+  }, [ledger]);
+  const registryOpenDepositCount = useMemo(
+    () => (ledger ? ledger.deposits.filter((d) => d.status !== REGISTRY_DEPOSIT_STATUS_BURNED).length : 0),
+    [ledger],
+  );
+  const registryBurnedDepositCount = useMemo(
+    () => (ledger ? ledger.deposits.filter((d) => d.status === REGISTRY_DEPOSIT_STATUS_BURNED).length : 0),
+    [ledger],
+  );
 
   return (
     <div className="mb-4 rounded-2xl border border-teal-200/70 bg-gradient-to-br from-teal-50/80 to-white px-3 py-3 ring-1 ring-teal-100/80">
@@ -414,27 +509,33 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
                 Source {cardanoSrcShort}
               </p>
               <div
-                className={`mt-1.5 grid gap-2 ${hasCardanoNativeCols ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1 sm:max-w-[11rem]'}`}
+                className={`mt-1.5 grid min-w-0 gap-2 ${hasCardanoNativeCols ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1 sm:max-w-[11rem]'}`}
               >
-                <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+                <div className="min-w-0 rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
                   <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">ADA</p>
-                  <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                  <p className="mt-0.5 max-w-full overflow-x-auto whitespace-nowrap text-base font-semibold tabular-nums tracking-tight text-slate-900">
                     {cardanoSource && yaciBase ? fmtBal(adaSrcBal) : '—'}
                   </p>
                 </div>
                 {cardWusdcUnit ? (
-                  <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+                  <div className="min-w-0 rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
                     <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDC</p>
-                    <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                      {cardanoSource && yaciBase ? fmtBal(nativeWusdcSrc) : '—'}
+                    <p
+                      className="mt-0.5 max-w-full overflow-x-auto whitespace-nowrap text-base font-semibold tabular-nums tracking-tight text-slate-900"
+                      title={cardanoSource && yaciBase && nativeWusdcSrc ? fmtLedgerAmount(BigInt(nativeWusdcSrc.split('.')[0] ?? nativeWusdcSrc)) : undefined}
+                    >
+                      {cardanoSource && yaciBase ? formatCardanoNativeZkDisplay(nativeWusdcSrc, cardanoNativeDecimals) : '—'}
                     </p>
                   </div>
                 ) : null}
                 {cardWusdtUnit ? (
-                  <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+                  <div className="min-w-0 rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
                     <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDT</p>
-                    <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                      {cardanoSource && yaciBase ? fmtBal(nativeWusdtSrc) : '—'}
+                    <p
+                      className="mt-0.5 max-w-full overflow-x-auto whitespace-nowrap text-base font-semibold tabular-nums tracking-tight text-slate-900"
+                      title={cardanoSource && yaciBase && nativeWusdtSrc ? fmtLedgerAmount(BigInt(nativeWusdtSrc.split('.')[0] ?? nativeWusdtSrc)) : undefined}
+                    >
+                      {cardanoSource && yaciBase ? formatCardanoNativeZkDisplay(nativeWusdtSrc, cardanoNativeDecimals) : '—'}
                     </p>
                   </div>
                 ) : null}
@@ -446,27 +547,33 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
                   Destination {cardanoDestShort}
                 </p>
                 <div
-                  className={`mt-1.5 grid gap-2 ${hasCardanoNativeCols ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1 sm:max-w-[11rem]'}`}
+                  className={`mt-1.5 grid min-w-0 gap-2 ${hasCardanoNativeCols ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1 sm:max-w-[11rem]'}`}
                 >
-                  <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+                  <div className="min-w-0 rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
                     <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">ADA</p>
-                    <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
+                    <p className="mt-0.5 max-w-full overflow-x-auto whitespace-nowrap text-base font-semibold tabular-nums tracking-tight text-slate-900">
                       {yaciBase ? fmtBal(adaDestBal) : '—'}
                     </p>
                   </div>
                   {cardWusdcUnit ? (
-                    <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+                    <div className="min-w-0 rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
                       <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDC</p>
-                      <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                        {yaciBase ? fmtBal(nativeWusdcDest) : '—'}
+                      <p
+                        className="mt-0.5 max-w-full overflow-x-auto whitespace-nowrap text-base font-semibold tabular-nums tracking-tight text-slate-900"
+                        title={yaciBase && nativeWusdcDest ? fmtLedgerAmount(BigInt(nativeWusdcDest.split('.')[0] ?? nativeWusdcDest)) : undefined}
+                      >
+                        {yaciBase ? formatCardanoNativeZkDisplay(nativeWusdcDest, cardanoNativeDecimals) : '—'}
                       </p>
                     </div>
                   ) : null}
                   {cardWusdtUnit ? (
-                    <div className="rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
+                    <div className="min-w-0 rounded-xl border border-white/80 bg-white/90 px-2 py-2 shadow-sm">
                       <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">zkUSDT</p>
-                      <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                        {yaciBase ? fmtBal(nativeWusdtDest) : '—'}
+                      <p
+                        className="mt-0.5 max-w-full overflow-x-auto whitespace-nowrap text-base font-semibold tabular-nums tracking-tight text-slate-900"
+                        title={yaciBase && nativeWusdtDest ? fmtLedgerAmount(BigInt(nativeWusdtDest.split('.')[0] ?? nativeWusdtDest)) : undefined}
+                      >
+                        {yaciBase ? formatCardanoNativeZkDisplay(nativeWusdtDest, cardanoNativeDecimals) : '—'}
                       </p>
                     </div>
                   ) : null}
@@ -475,6 +582,20 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
             ) : null}
           </div>
           {adaErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">{adaErr}</p> : null}
+          {yaciBase && (cardanoSource || cardanoDest) ? (
+            <p className="mt-1.5 text-[9px] leading-snug text-slate-500">
+              Figures are <strong>live</strong> Yaci Store <strong>payment-address UTxOs</strong> only: burned or spent native zk no longer exists at that address
+              and drops out of these totals (same idea as Midnight registry totals omitting <strong>Burned</strong>). zk at the bridge{' '}
+              <code className="rounded bg-slate-100 px-0.5">lock_pool</code> script is not counted here. Refresh every ~5s or use Refresh.
+              {cardanoBalanceFollowsMeshChange ? (
+                <>
+                  {' '}
+                  <strong>Cardano rows</strong> use your in-app mnemonic wallet&apos;s Mesh <strong>change address</strong> (signing wallet), not only the relayer
+                  demo bech32 from <code className="rounded bg-slate-100 px-0.5">/v1/demo/wallets</code>, so redeem/burn deductions match what you sign.
+                </>
+              ) : null}
+            </p>
+          ) : null}
         </div>
 
         <div className="border-t border-teal-100/90 pt-3">
@@ -502,31 +623,66 @@ export const BridgedBalancesBar: React.FC<{ demo: DemoWalletsResponse }> = ({ de
           ) : null}
           {midnightErr ? <p className="mt-1 text-[10px] leading-snug text-amber-800">{midnightErr}</p> : null}
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+            <div className="min-w-0 rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
               <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">tDUST</p>
-              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                {midnightConnected ? fmtLedgerAmount(midnightTdustBal) : '—'}
+              <p className={midnightBalClassName()}>{midnightConnected ? fmtLedgerAmount(midnightTdustBal) : '—'}</p>
+            </div>
+            <div className="min-w-0 rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">Wallet · zkUSDC</p>
+              <p className={midnightBalClassName()} title={midnightConnected ? fmtLedgerAmount(midnightZkUsdcBal) : undefined}>
+                {midnightConnected ? formatZkMicroTokenUnits(midnightZkUsdcBal) : '—'}
               </p>
             </div>
-            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">zkUSDC</p>
-              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                {midnightConnected ? fmtLedgerAmount(midnightZkUsdcBal) : '—'}
+            <div className="min-w-0 rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">Wallet · zkUSDT</p>
+              <p className={midnightBalClassName()} title={midnightConnected ? fmtLedgerAmount(midnightZkUsdtBal) : undefined}>
+                {midnightConnected ? formatZkMicroTokenUnits(midnightZkUsdtBal) : '—'}
               </p>
             </div>
-            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">zkUSDT</p>
-              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                {midnightConnected ? fmtLedgerAmount(midnightZkUsdtBal) : '—'}
-              </p>
-            </div>
-            <div className="rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80">
+            <div
+              className="min-w-0 rounded-xl border border-violet-200/80 bg-violet-50/50 px-2 py-2 ring-1 ring-violet-100/80"
+              title={
+                ledger && registryBurnedDepositCount > 0
+                  ? `${registryOpenDepositCount} not burned on-chain; ${registryBurnedDepositCount} burned (historic keys)`
+                  : 'Registry deposit keys not in Burned state'
+              }
+            >
               <p className="text-[9px] font-bold uppercase tracking-wide text-violet-800">Deposits</p>
-              <p className="mt-0.5 text-base font-semibold tabular-nums tracking-tight text-slate-900">
-                {midnightConnected && ledger ? ledger.depositCount : '—'}
-              </p>
+              <p className={midnightBalClassName()}>{midnightConnected && ledger ? registryOpenDepositCount : '—'}</p>
             </div>
           </div>
+          {midnightConnected && ledger ? (
+            <div className="mt-2 rounded-lg border border-violet-200/70 bg-white/80 px-2.5 py-2 ring-1 ring-violet-100/60">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-violet-900">Registry (minted on contract)</p>
+              <p
+                className="mt-1 font-mono text-[12px] font-semibold tabular-nums leading-snug text-slate-900"
+                title={`Raw micro-units — zkUSDC ${fmtLedgerAmount(registryUsdcSum)}, zkUSDT ${fmtLedgerAmount(registryUsdtSum)}`}
+              >
+                zkUSDC {formatZkMicroTokenUnits(registryUsdcSum)}
+                <span className="mx-1.5 font-sans font-normal text-slate-400">·</span>
+                zkUSDT {formatZkMicroTokenUnits(registryUsdtSum)}
+                <span className="ml-2 font-sans text-[10px] font-normal text-slate-500">
+                  ({registryOpenDepositCount} open
+                  {registryBurnedDepositCount > 0
+                    ? `, ${registryBurnedDepositCount} burned`
+                    : ''}
+                  )
+                </span>
+              </p>
+              <p className="mt-1 text-[9px] leading-snug text-slate-500">
+                This is the zk-stables-registry ledger, not your unshielded wallet. Totals and “open” count omit deposits in{' '}
+                <strong>Burned</strong> state (value destroyed after <code className="rounded bg-violet-100/80 px-0.5">finalizeBurn</code>
+                ). Wallet columns stay 0 until{' '}
+                <code className="rounded bg-violet-100/80 px-0.5">sendWrappedUnshieldedToUser</code> runs in redeem/burn.
+              </p>
+            </div>
+          ) : null}
+          {midnightConnected ? (
+            <p className="mt-2 text-[10px] leading-snug text-slate-500">
+              <strong>Deposits</strong> = registry tickets not yet burned on-chain (same “gone from supply” view as Cardano figures: only what still exists is
+              counted). <strong>Wallet · zk*</strong> = unshielded balances at your address only.
+            </p>
+          ) : null}
         </div>
       </div>
     </div>

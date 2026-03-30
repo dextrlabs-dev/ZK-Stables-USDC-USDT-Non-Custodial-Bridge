@@ -91,6 +91,7 @@ See [`../scripts/README-local-evm.md`](../scripts/README-local-evm.md).
 | `RELAYER_EVM_WRAPPED_TOKEN_USDC` / `RELAYER_EVM_WRAPPED_TOKEN_USDT` | _(unset)_ | Optional second watcher address when both zk tokens are deployed |
 | `RELAYER_EVM_BURN_ASSET` | `USDC` | `USDC` or `USDT` — sets `asset` / `assetKind` on watcher-enqueued burn jobs when using **only** `RELAYER_EVM_WRAPPED_TOKEN` |
 | `RELAYER_CARDANO_OPERATOR_BURN_RELEASE` | _(false)_ | If `true`, relayer may submit operator `BridgeRelease` for Cardano-sourced BURN |
+| `RELAYER_CARDANO_OPERATOR_BURN_RELEASE_TRANSFER_LEGACY` | _(unset)_ | If `true`/`1`, operator release pays **synthetic zk** to the payout address (old behavior). Default: **burn** supply (negative mint) and pay **ADA only** from the lock — true redeem before EVM unlock |
 | `RELAYER_CARDANO_DESTINATION_LOCK_HOLD` | _(false)_ | If `true`, LOCK→Cardano stops after mint+lock (recipient-only datum for user `BridgeRelease`) |
 | `RELAYER_EVM_POOL_LOCK` | _(unset)_ | Pool to call `unlockWithInclusionProof` after burn proof |
 | `RELAYER_EVM_UNDERLYING_TOKEN` | _(unset)_ | Underlying ERC-20 released on unlock (e.g. mUSDC) |

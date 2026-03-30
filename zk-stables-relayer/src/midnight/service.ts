@@ -16,6 +16,7 @@ import * as Rx from 'rxjs';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { zkStablesRegistryPrivateStateId } from '@zk-stables/midnight-contract';
 import type { Logger } from 'pino';
+import { midnightIndexerPing } from '../adapters/chainHealth.js';
 import { zkStablesRegistryCompiledContract } from './zk-stables-compiled-contract.js';
 import { RelayerMidnightConfig } from './config.js';
 import { configureZkStablesRegistryProviders } from './providers.js';
@@ -36,6 +37,48 @@ let initPromise: Promise<MidnightRelayerHandle | null> | null = null;
 
 export function isMidnightBridgeEnabled(): boolean {
   return process.env.RELAYER_MIDNIGHT_ENABLED === 'true' || process.env.RELAYER_MIDNIGHT_ENABLED === '1';
+}
+
+function midnightIndexerBaseUrl(): string {
+  return (process.env.RELAYER_MIDNIGHT_INDEXER_URL ?? 'http://127.0.0.1:8088/api/v4/graphql').trim();
+}
+
+function isTransientMidnightNetErr(e: unknown): boolean {
+  const msg = String(e);
+  /** Keep narrow: application / contract errors must not spin retries. */
+  return /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|fetch failed|socket hang up|ECONNRESET|Failed to fetch|network/i.test(msg);
+}
+
+async function assertMidnightIndexerReachable(logger: Logger): Promise<void> {
+  const url = midnightIndexerBaseUrl();
+  const ping = await midnightIndexerPing(url);
+  if (!ping.ok) {
+    throw new Error(
+      `Midnight indexer not reachable at ${url} (${ping.error ?? `HTTP ${String(ping.status ?? '?')}`}). ` +
+        `Start the indexer or set RELAYER_MIDNIGHT_INDEXER_URL before LOCK/BURN→Midnight.`,
+    );
+  }
+  logger.info({ url, status: ping.status }, 'Midnight: indexer ping ok');
+}
+
+async function withMidnightNetRetries<T>(logger: Logger, op: string, fn: () => Promise<T>): Promise<T> {
+  const max = Math.max(1, Math.min(12, Number(process.env.RELAYER_MIDNIGHT_NET_RETRIES ?? '4')));
+  const delayMs = Math.max(500, Number(process.env.RELAYER_MIDNIGHT_NET_RETRY_MS ?? '4000'));
+  let last: unknown;
+  for (let i = 0; i < max; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      if (i < max - 1 && isTransientMidnightNetErr(e)) {
+        logger.warn({ err: String(e), attempt: i + 1, max, op }, 'Midnight: transient network/indexer error, retrying');
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw last;
 }
 
 function hexToBytes32(hex: string): Uint8Array {
@@ -193,59 +236,62 @@ export async function runMidnightMintPipeline(
   bridgeRecipient?: string,
 ): Promise<string> {
   return withMidnightPipelineMutex(async () => {
-    const h = await ensureMidnightRelayer(logger);
-    if (!h) return '';
+    return withMidnightNetRetries(logger, 'mintPipeline', async () => {
+      await assertMidnightIndexerReachable(logger);
+      const h = await ensureMidnightRelayer(logger);
+      if (!h) return '';
 
-    const depHex = Buffer.from(args.depositCommitment).toString('hex');
-    const lines: string[] = [`Contract ${h.contractAddress}`, `Deposit ${depHex}`];
-    if (bridgeRecipient) lines.push(`Intent recipient (hint): ${bridgeRecipient}`);
+      const depHex = Buffer.from(args.depositCommitment).toString('hex');
+      const lines: string[] = [`Contract ${h.contractAddress}`, `Deposit ${depHex}`];
+      if (bridgeRecipient) lines.push(`Intent recipient (hint): ${bridgeRecipient}`);
 
-    logger.info({ dep: depHex }, 'Midnight: registerDeposit…');
-    try {
-      const r0 = await h.callTx.registerDeposit(
-        args.depositCommitment,
-        args.assetKind,
-        args.sourceChainId,
-        args.amount,
-        args.holderPk,
-      );
-      lines.push(`registerDeposit txId=${String(r0.public.txId)} txHash=${String(r0.public.txHash)}`);
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes('already registered')) {
-        logger.warn({ dep: depHex }, 'Midnight: deposit already registered (idempotent)');
-        lines.push('registerDeposit skipped: already registered');
-      } else {
-        logger.error({ err: msg, dep: depHex }, 'Midnight: registerDeposit failed');
-        throw e;
+      logger.info({ dep: depHex }, 'Midnight: registerDeposit…');
+      try {
+        const r0 = await h.callTx.registerDeposit(
+          args.depositCommitment,
+          args.assetKind,
+          args.sourceChainId,
+          args.amount,
+          args.holderPk,
+        );
+        lines.push(`registerDeposit txId=${String(r0.public.txId)} txHash=${String(r0.public.txHash)}`);
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('already registered')) {
+          logger.warn({ dep: depHex }, 'Midnight: deposit already registered (idempotent)');
+          lines.push('registerDeposit skipped: already registered');
+        } else {
+          logger.error({ err: msg, dep: depHex }, 'Midnight: registerDeposit failed');
+          throw e;
+        }
       }
-    }
 
-    logger.info({ dep: depHex }, 'Midnight: proveHolder…');
-    try {
-      const r1 = await h.callTx.proveHolder(args.depositCommitment);
-      lines.push(`proveHolder txId=${String(r1.public.txId)} txHash=${String(r1.public.txHash)}`);
-    } catch (e) {
-      logger.warn({ err: String(e), dep: depHex }, 'Midnight: proveHolder failed (may already be done)');
-      lines.push(`proveHolder skipped/failed: ${String(e)}`);
-    }
-
-    logger.info({ dep: depHex }, 'Midnight: mintWrappedUnshielded…');
-    try {
-      const r2 = await h.callTx.mintWrappedUnshielded(args.depositCommitment);
-      lines.push(`mintWrappedUnshielded txId=${String(r2.public.txId)} txHash=${String(r2.public.txHash)}`);
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes('Already minted') || msg.includes('already minted')) {
-        logger.warn({ dep: depHex }, 'Midnight: mintWrappedUnshielded skipped (already minted for this deposit)');
-        lines.push('mintWrappedUnshielded skipped: already minted unshielded');
-      } else {
-        logger.error({ err: msg, dep: depHex }, 'Midnight: mintWrappedUnshielded failed');
-        throw e;
+      logger.info({ dep: depHex }, 'Midnight: proveHolder…');
+      try {
+        const r1 = await h.callTx.proveHolder(args.depositCommitment);
+        lines.push(`proveHolder txId=${String(r1.public.txId)} txHash=${String(r1.public.txHash)}`);
+      } catch (e) {
+        logger.warn({ err: String(e), dep: depHex }, 'Midnight: proveHolder failed (may already be done)');
+        lines.push(`proveHolder skipped/failed: ${String(e)}`);
       }
-    }
 
-    return lines.join('\n');
+      logger.info({ dep: depHex }, 'Midnight: mintWrappedUnshielded…');
+      try {
+        const r2 = await h.callTx.mintWrappedUnshielded(args.depositCommitment);
+        lines.push(`mintWrappedUnshielded txId=${String(r2.public.txId)} txHash=${String(r2.public.txHash)}`);
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('Already minted') || msg.includes('already minted')) {
+          logger.warn({ dep: depHex }, 'Midnight: mintWrappedUnshielded skipped (already minted for this deposit)');
+          lines.push('mintWrappedUnshielded skipped: already minted unshielded');
+        } else {
+          logger.error({ err: msg, dep: depHex }, 'Midnight: mintWrappedUnshielded failed');
+          throw e;
+        }
+      }
+
+      return lines.join('\n');
+    });
   });
 }
 
@@ -268,69 +314,91 @@ export type BurnPipelineArgs = {
  */
 export async function runMidnightBurnPipeline(logger: Logger, args: BurnPipelineArgs): Promise<string> {
   return withMidnightPipelineMutex(async () => {
-    const h = await ensureMidnightRelayer(logger);
-    if (!h) return '';
-
-    const depHex = Buffer.from(args.depositCommitment).toString('hex');
-    const lines: string[] = [`Contract ${h.contractAddress}`, `Deposit ${depHex}`];
-
-    // Step 1: initiateBurn — marks deposit as exit-pending (state 1→2)
-    logger.info({ dep: depHex }, 'Midnight: initiateBurn…');
-    try {
-      const r0 = await h.callTx.initiateBurn(
-        args.depositCommitment,
-        args.destChainId,
-        args.recipientCommitment,
-      );
-      lines.push(`initiateBurn txId=${String(r0.public.txId)} txHash=${String(r0.public.txHash)}`);
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes('exit pending') || msg.includes('Already') || msg.includes('Not active')) {
-        logger.warn({ dep: depHex }, 'Midnight: initiateBurn skipped (already exit pending or finalized)');
-        lines.push('initiateBurn skipped: already exit pending');
-      } else {
-        logger.error({ err: msg, dep: depHex }, 'Midnight: initiateBurn failed');
-        throw e;
+    return withMidnightNetRetries(logger, 'burnPipeline', async () => {
+      await assertMidnightIndexerReachable(logger);
+      const h = await ensureMidnightRelayer(logger);
+      if (!h) {
+        throw new Error(
+          'Midnight relayer handle unavailable (contract/wallet not initialized); refusing to complete BURN without on-chain finalizeBurn',
+        );
       }
-    }
 
-    // Step 2: sendWrappedUnshieldedToUser — requires state == 2 (exit pending)
-    logger.info({ dep: depHex }, 'Midnight: sendWrappedUnshieldedToUser…');
-    try {
-      const walletAddr = h.walletAddress;
-      const r_send = await h.callTx.sendWrappedUnshieldedToUser(
-        args.depositCommitment,
-        { bytes: walletAddr },
-      );
-      lines.push(`sendWrappedUnshieldedToUser txId=${String(r_send.public.txId)} txHash=${String(r_send.public.txHash)}`);
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes('Already released') || msg.includes('already released') || msg.includes('Already sent') || msg.includes('released')) {
-        logger.warn({ dep: depHex }, 'Midnight: sendWrappedUnshieldedToUser skipped (already released)');
-        lines.push('sendWrappedUnshieldedToUser skipped: already released');
-      } else {
-        logger.error({ err: msg, dep: depHex }, 'Midnight: sendWrappedUnshieldedToUser failed');
-        throw e;
+      const depHex = Buffer.from(args.depositCommitment).toString('hex');
+      const lines: string[] = [`Contract ${h.contractAddress}`, `Deposit ${depHex}`];
+
+      const unknownDepositHint =
+        'Unknown deposit means this commitment is not a row on the relayer’s joined zk-stables-registry — usually RELAYER_MIDNIGHT_CONTRACT_ADDRESS ≠ the contract you used in the UI, or depositCommitmentHex is not the ledger ticket (do not use burnCommitmentHex / recipientComm there).';
+
+      // Step 1: initiateBurn — marks deposit as exit-pending (state 1→2)
+      logger.info({ dep: depHex }, 'Midnight: initiateBurn…');
+      try {
+        const r0 = await h.callTx.initiateBurn(
+          args.depositCommitment,
+          args.destChainId,
+          args.recipientCommitment,
+        );
+        lines.push(`initiateBurn txId=${String(r0.public.txId)} txHash=${String(r0.public.txHash)}`);
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('Unknown deposit')) {
+          logger.error({ dep: depHex, contract: h.contractAddress }, 'Midnight: initiateBurn Unknown deposit');
+          throw new Error(`${msg}\n${unknownDepositHint}`);
+        }
+        if (msg.includes('exit pending') || msg.includes('Already') || msg.includes('Not active')) {
+          logger.warn({ dep: depHex }, 'Midnight: initiateBurn skipped (already exit pending or finalized)');
+          lines.push('initiateBurn skipped: already exit pending');
+        } else {
+          logger.error({ err: msg, dep: depHex }, 'Midnight: initiateBurn failed');
+          throw e;
+        }
       }
-    }
 
-    // Step 3: finalizeBurn — requires state == 2 and tokens released
-    logger.info({ dep: depHex }, 'Midnight: finalizeBurn…');
-    try {
-      const r = await h.callTx.finalizeBurn(args.depositCommitment);
-      lines.push(`finalizeBurn txId=${String(r.public.txId)} txHash=${String(r.public.txHash)}`);
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes('already finalized') || msg.includes('Already burned')) {
-        logger.warn({ dep: depHex }, 'Midnight: finalizeBurn skipped (already finalized)');
-        lines.push('finalizeBurn skipped: already finalized');
-      } else {
-        logger.error({ err: msg, dep: depHex }, 'Midnight: finalizeBurn failed');
-        throw e;
+      // Step 2: sendWrappedUnshieldedToUser — requires state == 2 (exit pending)
+      logger.info({ dep: depHex }, 'Midnight: sendWrappedUnshieldedToUser…');
+      try {
+        const walletAddr = h.walletAddress;
+        const r_send = await h.callTx.sendWrappedUnshieldedToUser(
+          args.depositCommitment,
+          { bytes: walletAddr },
+        );
+        lines.push(`sendWrappedUnshieldedToUser txId=${String(r_send.public.txId)} txHash=${String(r_send.public.txHash)}`);
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('Unknown deposit')) {
+          logger.error({ dep: depHex, contract: h.contractAddress }, 'Midnight: sendWrapped Unknown deposit');
+          throw new Error(`${msg}\n${unknownDepositHint}`);
+        }
+        if (msg.includes('Already released') || msg.includes('already released') || msg.includes('Already sent') || msg.includes('released')) {
+          logger.warn({ dep: depHex }, 'Midnight: sendWrappedUnshieldedToUser skipped (already released)');
+          lines.push('sendWrappedUnshieldedToUser skipped: already released');
+        } else {
+          logger.error({ err: msg, dep: depHex }, 'Midnight: sendWrappedUnshieldedToUser failed');
+          throw e;
+        }
       }
-    }
 
-    return lines.join('\n');
+      // Step 3: finalizeBurn — requires state == 2 and tokens released
+      logger.info({ dep: depHex }, 'Midnight: finalizeBurn…');
+      try {
+        const r = await h.callTx.finalizeBurn(args.depositCommitment);
+        lines.push(`finalizeBurn txId=${String(r.public.txId)} txHash=${String(r.public.txHash)}`);
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('Unknown deposit')) {
+          logger.error({ dep: depHex, contract: h.contractAddress }, 'Midnight: finalizeBurn Unknown deposit');
+          throw new Error(`${msg}\n${unknownDepositHint}`);
+        }
+        if (msg.includes('already finalized') || msg.includes('Already burned')) {
+          logger.warn({ dep: depHex }, 'Midnight: finalizeBurn skipped (already finalized)');
+          lines.push('finalizeBurn skipped: already finalized');
+        } else {
+          logger.error({ err: msg, dep: depHex }, 'Midnight: finalizeBurn failed');
+          throw e;
+        }
+      }
+
+      return lines.join('\n');
+    });
   });
 }
 

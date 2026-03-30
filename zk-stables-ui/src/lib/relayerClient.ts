@@ -169,6 +169,8 @@ export type BurnIntentPayload = {
       contractAddress?: string;
       destChainId?: number;
       lockNonce?: string;
+      /** Ledger deposit key (64 hex); required with holder `initiateBurn` tx id for relayer finalize path. */
+      depositCommitmentHex?: string;
     };
   };
 };
