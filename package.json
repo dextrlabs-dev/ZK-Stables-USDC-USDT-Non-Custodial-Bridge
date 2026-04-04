@@ -7,7 +7,8 @@
     "local-cli",
     "bridge-cli",
     "zk-stables-relayer",
-    "zk-stables-ui"
+    "zk-stables-ui",
+    "bridge-operator-console"
   ],
   "scripts": {
     "fund:cardano-yaci": "node scripts/fund-cardano-demo-from-yaci.mjs",
@@ -25,7 +26,10 @@
     "run-registry-all": "npm run run-registry-all -w @zk-stables/local-cli",
     "bridge-flow-report": "node scripts/full-bridge-flow-report.mjs",
     "bridge-cli": "npm run start -w @zk-stables/bridge-cli",
-    "bridge-cli:build": "npm run build -w @zk-stables/bridge-cli"
+    "bridge-cli:build": "npm run build -w @zk-stables/bridge-cli",
+    "ops:zk-bridge-matrix": "node scripts/ops-zk-bridge-production-matrix.mjs",
+    "bridge-console:dev": "npm run dev -w bridge-operator-console",
+    "bridge-console:build": "npm run build -w bridge-operator-console"
   },
   "devDependencies": {
     "patch-package": "^8.0.0"

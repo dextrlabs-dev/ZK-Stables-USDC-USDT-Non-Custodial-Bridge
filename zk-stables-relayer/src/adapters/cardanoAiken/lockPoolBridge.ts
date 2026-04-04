@@ -237,6 +237,8 @@ export async function lockMintHoldAtScriptOnly(params: {
   asset: 'USDC' | 'USDT';
   recipientCommitmentHex: string;
   logger: Logger;
+  /** When true, the wallet's own key hash is set as `bridgeOperatorVkeyHashHex56` in the datum so it can sign BridgeRelease. */
+  operatorCanRelease?: boolean;
 }): Promise<{ lockTxHash: string; lockOutputIndex: number; policyId: string; scriptAddress: string; detail: string }> {
   const ctx = await ensureCardanoBridgeWallet(params.logger);
   if (!ctx) throw new Error('Cardano bridge wallet not configured');
@@ -298,7 +300,7 @@ export async function lockMintHoldAtScriptOnly(params: {
     recipientCommitmentHex: params.recipientCommitmentHex,
     sourceChainId,
     destinationChainId,
-    bridgeOperatorVkeyHashHex56: null,
+    bridgeOperatorVkeyHashHex56: params.operatorCanRelease ? operatorVkh : null,
   };
   const datumData = buildLockDatum(datum);
 

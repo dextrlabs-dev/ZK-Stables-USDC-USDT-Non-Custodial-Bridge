@@ -24,6 +24,8 @@
  * stale keys that can yield "Failed to prove: bad input" on deploy).
  * - `GENESIS_INDEXER_WAIT_MS` (default 120000) — after deploy, poll until indexer contract state matches local
  *   verifier keys before the first circuit call.
+ * - `GENESIS_FUND_ONLY` — if `1` or `true`, run wallet sync + `AUTO_FUND` path (yarn fund + dust registration) then
+ *   exit (no contract deploy). Use for relayer `RELAYER_MIDNIGHT_AUTO_DEPLOY` when the genesis wallet lacks dust.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -223,10 +225,11 @@ async function main(): Promise<void> {
   logStep(`Unshielded (fund this for DUST path): ${unshieldedBech32}`);
 
   const autoFund = process.env.AUTO_FUND === '1' || process.env.AUTO_FUND === 'true';
+  const fundOnly = process.env.GENESIS_FUND_ONLY === '1' || process.env.GENESIS_FUND_ONLY === 'true';
   const mlnDir = process.env.MIDNIGHT_LOCAL_NETWORK_DIR ?? '/root/midnight-local-network';
-  if (autoFund) {
+  if (autoFund || fundOnly) {
     if (!existsSync(`${mlnDir}/package.json`)) {
-      throw new Error(`AUTO_FUND set but MIDNIGHT_LOCAL_NETWORK_DIR not found: ${mlnDir}`);
+      throw new Error(`AUTO_FUND / GENESIS_FUND_ONLY set but MIDNIGHT_LOCAL_NETWORK_DIR not found: ${mlnDir}`);
     }
     logStep('AUTO_FUND: yarn fund (shielded)…');
     execFileSync('yarn', ['fund', shieldedBech32], { cwd: mlnDir, stdio: 'inherit' });
@@ -235,6 +238,10 @@ async function main(): Promise<void> {
     logStep('AUTO_FUND: waiting for unshielded UTXOs to appear in wallet…');
     await waitForUnshieldedUtxos(walletCtx, 240_000);
     await registerDustGenerationIfNeeded(walletCtx);
+    if (fundOnly) {
+      logStep('GENESIS_FUND_ONLY=1 — wallet funded + dust registered; exiting before deploy.');
+      return;
+    }
   } else {
     const dustBal = synced.dust.balance(new Date());
     if (dustBal <= 0n) {

@@ -21,6 +21,13 @@ export function isSrsStrictMode(): boolean {
   return isTruthyFlag('RELAYER_SRS_STRICT');
 }
 
+/**
+ * Operator-console “backend-first” flags (`RELAYER_OPERATOR_CONSOLE_*`, `RELAYER_OPERATOR_CONSOLE_ALL`)
+ * intentionally bypass the relaxed dev matrix — they do **not** satisfy `RELAYER_SRS_STRICT` checks.
+ * Use strict mode only for full production SRS stacks; for dev/ops with operator HTTP + subset of chains,
+ * keep `RELAYER_SRS_STRICT=false` (or extend strict checks explicitly if you need strict + operator routes).
+ */
+
 function hasCardanoWalletMnemonic(): boolean {
   return Boolean(envTrim('RELAYER_CARDANO_WALLET_MNEMONIC') || envTrim('CARDANO_WALLET_MNEMONIC'));
 }

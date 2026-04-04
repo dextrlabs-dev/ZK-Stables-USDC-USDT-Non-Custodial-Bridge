@@ -26,11 +26,31 @@ import {
   mergeRelayerBridgeIntoConnected,
   relayerBridgeSnapshot,
 } from './config/bridgeRecipients.js';
-import { isMidnightBridgeEnabled, warmupMidnightRelayer, getMidnightContractAddress } from './midnight/service.js';
+import { isMidnightRelayerInitEnabled } from './adapters/midnightOperatorConsoleTx.js';
+import {
+  getMidnightContractAddress,
+  readMidnightRegistryDepositBurnPreflight,
+  submitMidnightInitiateBurnHttp,
+  warmupMidnightRelayer,
+} from './midnight/service.js';
 import { assertRelayerStartupConfig } from './config/srsCompliance.js';
 import { validateCardanoBurnIntentLockDatum } from './adapters/cardanoAiken/validateCardanoBurnIntent.js';
 import { loadBlueprint } from './adapters/cardanoAiken/blueprint.js';
 import { getLockPoolScript } from './adapters/cardanoAiken/scripts.js';
+import { handleBridgeConsoleState } from './http/bridgeConsoleState.js';
+import { handleEvmRecentLocks } from './http/evmRecentLocks.js';
+import { handleCardanoRecentBurnHints } from './http/cardanoRecentBurnHints.js';
+import { handleEvmRecentBurnHints } from './http/evmRecentBurnHints.js';
+import { handleMidnightRecentBurnHints } from './http/midnightRecentBurnHints.js';
+import {
+  handlePostEvmExecuteBurn,
+  handlePostEvmExecuteLock,
+  handlePostEvmOperatorMint,
+  handlePostEvmOperatorRedeemToEvm,
+} from './http/evmOperatorConsoleHttp.js';
+import { handlePostCardanoOperatorMint, handlePostCardanoOperatorRedeemToEvm } from './http/cardanoOperatorConsoleHttp.js';
+import { handlePostMidnightOperatorRedeemToEvm } from './http/midnightOperatorConsoleHttp.js';
+import { handleGetBalances } from './http/balances.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
@@ -136,17 +156,121 @@ app.get('/v1/health/chains', async (c) => {
     cardano,
     relayerBridge: {
       ...relayerBridgeSnapshot().configured,
-      midnight: relayerBridgeSnapshot().configured.midnight || isMidnightBridgeEnabled(),
+      midnight: relayerBridgeSnapshot().configured.midnight || isMidnightRelayerInitEnabled(),
     },
   });
 });
 
 app.get('/v1/bridge/recipients', (c) => c.json(relayerBridgeSnapshot()));
 
+/** Operator-console: UTxO/balance snapshots + recent job anchors (selectors; no indexer scraping of arbitrary addresses). */
+app.get('/v1/bridge/console-state', (c) => handleBridgeConsoleState(c, logger));
+/** Alias (same payload) — easier to spot in older deployments or reverse proxies. */
+app.get('/v1/console/bridge-state', (c) => handleBridgeConsoleState(c, logger));
+
+/** Scan `Locked` logs for `amount` + `asset` (operator console auto-anchor). */
+app.get('/v1/evm/recent-locks', (c) => handleEvmRecentLocks(c, logger));
+
+/** Scan `lock_pool` UTxOs (inline datum) for `amount` + `asset` (operator console Cardano→EVM BURN auto-anchor). */
+app.get('/v1/cardano/recent-burn-hints', (c) => handleCardanoRecentBurnHints(c, logger));
+
+/** Scan wrapped-token `Burned` logs for `amount` + `asset` (operator console EVM BURN auto-anchor). */
+app.get('/v1/evm/recent-burn-hints', (c) => handleEvmRecentBurnHints(c, logger));
+
+/** Registry ledger deposits for `amount` + `asset` (operator console Midnight→EVM BURN auto-anchor; indexer only). */
+app.get('/v1/midnight/recent-burn-hints', (c) => handleMidnightRecentBurnHints(c, logger));
+
+/** Operator console: submit pool `approve` + `lock` with RELAYER_EVM_PRIVATE_KEY (gated by RELAYER_OPERATOR_CONSOLE_EVM_TX). */
+app.post('/v1/evm/execute-lock', (c) => handlePostEvmExecuteLock(c, logger));
+
+/** Operator console: submit wrapped-token `burn` with RELAYER_EVM_PRIVATE_KEY (same gate as execute-lock). */
+app.post('/v1/evm/execute-burn', (c) => handlePostEvmExecuteBurn(c, logger));
+
+/** Operator console: pool lock + enqueue LOCK (RELAYER_OPERATOR_CONSOLE_EVM_TX). */
+app.post('/v1/evm/operator/mint', (c) => handlePostEvmOperatorMint(c, logger));
+
+/** Operator console: wrapped burn + enqueue BURN (same gate as execute-burn). */
+app.post('/v1/evm/operator/redeem-to-evm', (c) => handlePostEvmOperatorRedeemToEvm(c, logger));
+
+/** Operator console: Cardano mint+lock+release (RELAYER_OPERATOR_CONSOLE_CARDANO_TX / RELAYER_OPERATOR_CONSOLE_ALL). */
+app.post('/v1/cardano/operator/mint', (c) => handlePostCardanoOperatorMint(c, logger));
+
+/** Operator console: scan lock_pool + enqueue BURN to EVM (same Cardano operator gate). */
+app.post('/v1/cardano/operator/redeem-to-evm', (c) => handlePostCardanoOperatorRedeemToEvm(c, logger));
+
 app.get('/v1/midnight/contract', async (c) => {
   const addr = await getMidnightContractAddress();
-  return c.json({ contractAddress: addr, enabled: isMidnightBridgeEnabled() });
+  return c.json({ contractAddress: addr, enabled: isMidnightRelayerInitEnabled() });
 });
+
+/**
+ * Ops / bridge-cli helper: run `initiateBurn` inside the relayer process (same LevelDB + pipeline mutex as mint/burn).
+ * Avoids a second `npx tsx …/midnight-initiate-burn-only.ts` process blocking on `abstract-level` while the relayer proves.
+ */
+app.post('/v1/midnight/initiate-burn', async (c) => {
+  if (!isMidnightRelayerInitEnabled()) {
+    return c.json(
+      {
+        error:
+          'Midnight wallet/bootstrap disabled. Set RELAYER_MIDNIGHT_ENABLED=true or RELAYER_OPERATOR_CONSOLE_MIDNIGHT_TX / RELAYER_OPERATOR_CONSOLE_ALL with GENESIS_SEED_HASH_HEX or BIP39_MNEMONIC + RELAYER_MIDNIGHT_CONTRACT_ADDRESS.',
+      },
+      503,
+    );
+  }
+  type Body = {
+    depositCommitmentHex?: string;
+    recipientCommitmentHex?: string;
+    destChainId?: string | number;
+  };
+  let body: Body;
+  try {
+    body = (await c.req.json()) as Body;
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  const dh = body.depositCommitmentHex?.trim().replace(/^0x/i, '') ?? '';
+  const rh = body.recipientCommitmentHex?.trim().replace(/^0x/i, '') ?? '';
+  if (dh.length !== 64 || !/^[0-9a-fA-F]+$/u.test(dh) || rh.length !== 64 || !/^[0-9a-fA-F]+$/u.test(rh)) {
+    return c.json(
+      { error: 'depositCommitmentHex and recipientCommitmentHex required (64 hex chars each, ledger deposit key + recipientComm)' },
+      400,
+    );
+  }
+  const destStr = body.destChainId != null ? String(body.destChainId).trim() : '2';
+  let destChainId: bigint;
+  try {
+    destChainId = BigInt(destStr);
+  } catch {
+    return c.json({ error: 'invalid destChainId' }, 400);
+  }
+  const depositCommitment = Uint8Array.from(Buffer.from(dh, 'hex'));
+  const recipientCommitment = Uint8Array.from(Buffer.from(rh, 'hex'));
+
+  const skipPreflight =
+    process.env.RELAYER_MIDNIGHT_INITIATE_BURN_SKIP_PREFLIGHT === '1' ||
+    process.env.RELAYER_MIDNIGHT_INITIATE_BURN_SKIP_PREFLIGHT === 'true';
+  if (!skipPreflight) {
+    const pre = await readMidnightRegistryDepositBurnPreflight(logger, depositCommitment);
+    if (!pre.okForInitiateBurn) {
+      return c.json({ error: 'deposit_not_ready_for_initiateBurn', preflight: pre }, 409);
+    }
+  }
+
+  try {
+    const out = await submitMidnightInitiateBurnHttp(logger, {
+      depositCommitment,
+      destChainId,
+      recipientCommitment,
+    });
+    return c.json(out, 200);
+  } catch (e) {
+    logger.error({ err: e }, 'POST /v1/midnight/initiate-burn failed');
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+/** Operator console: scan registry + optional initiateBurn + enqueue BURN (Midnight relayer init). */
+app.post('/v1/midnight/operator/redeem-to-evm', (c) => handlePostMidnightOperatorRedeemToEvm(c, logger));
 
 /** Lock pool script CBOR + address for Mesh in the browser (same blueprint as relayer). */
 app.get('/v1/cardano/bridge-metadata', (c) => {
@@ -292,22 +416,13 @@ app.post('/v1/intents/burn', async (c) => {
 
 app.get('/v1/jobs', (c) => c.json({ jobs: listJobs().map(serializeRelayerJob) }));
 
+app.get('/v1/balances', (c) => handleGetBalances(c, logger));
+
 app.get('/v1/jobs/:id', (c) => {
   const j = getJob(c.req.param('id'));
   if (!j) return c.json({ error: 'not found' }, 404);
   return c.json(serializeRelayerJob(j));
 });
-
-logger.info({ port }, 'zk-stables-relayer listening');
-
-if (isMidnightBridgeEnabled()) {
-  void warmupMidnightRelayer(logger)
-    .then((h) => {
-      if (h) logger.info({ contract: h.contractAddress }, 'Midnight relayer ready');
-      else logger.warn('RELAYER_MIDNIGHT_ENABLED but Midnight relayer did not initialize (check BIP39_MNEMONIC / contract address / deploy flag)');
-    })
-    .catch((e) => logger.error({ err: e }, 'Midnight relayer warmup failed'));
-}
 
 // EVM + Cardano watchers (SRS still allows HTTP POST anchors; pool watcher is optional).
 if (process.env.RELAYER_EVM_LOCK_WATCHER_ENABLED === 'true' || process.env.RELAYER_EVM_LOCK_WATCHER_ENABLED === '1') {
@@ -320,4 +435,18 @@ if (process.env.RELAYER_EVM_LOCK_WATCHER_ENABLED === 'true' || process.env.RELAY
 void runEvmBurnWatcher(logger);
 void runCardanoLockWatcher(logger);
 
+/** HTTP must come up immediately; `findDeployedContract` can take many minutes — never block `serve()` on it. */
 serve({ fetch: app.fetch, port });
+logger.info({ port }, 'zk-stables-relayer listening');
+
+if (isMidnightRelayerInitEnabled()) {
+  void warmupMidnightRelayer(logger)
+    .then((h) => {
+      if (h) logger.info({ contract: h.contractAddress }, 'Midnight relayer ready');
+      else
+        logger.warn(
+          'Midnight relayer did not initialize (check RELAYER_MIDNIGHT_ENABLED or operator-console Midnight flags, BIP39_MNEMONIC / contract address / deploy flag)',
+        );
+    })
+    .catch((e) => logger.error({ err: e }, 'Midnight relayer warmup failed'));
+}

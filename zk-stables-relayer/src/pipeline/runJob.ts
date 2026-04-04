@@ -44,12 +44,8 @@ import {
   resolveYaciBaseUrl,
 } from '../adapters/cardanoIndexer.js';
 import type { Logger } from 'pino';
-import {
-  ensureMidnightRelayer,
-  isMidnightBridgeEnabled,
-  runMidnightBurnPipeline,
-  runMidnightMintPipeline,
-} from '../midnight/service.js';
+import { isMidnightRelayerInitEnabled } from '../adapters/midnightOperatorConsoleTx.js';
+import { ensureMidnightRelayer, runMidnightBurnPipeline, runMidnightMintPipeline } from '../midnight/service.js';
 import type { MintPipelineArgs, BurnPipelineArgs } from '../midnight/service.js';
 import { holderLedgerPublicKey } from '../midnight/holder-key.js';
 import { AssetKind } from '@zk-stables/midnight-contract';
@@ -65,6 +61,7 @@ import {
   lockMintHoldAtScriptOnly,
   bridgeReleaseLockUtxo,
 } from '../adapters/cardanoAiken/lockPoolBridge.js';
+import { tryBurnSyntheticHeldByBridgeWallet } from '../adapters/cardanoMintPayout.js';
 import { relayerBridgeCardanoRecipient } from '../config/bridgeRecipients.js';
 import { buildLockRefFromIntent } from './lockRef.js';
 
@@ -377,6 +374,30 @@ async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKe
         patchJob(id, {
           destinationHint: `${j?.destinationHint ?? hint}\nUser BridgeRelease tx: ${src!.spendTxHash}`,
         });
+        // User `BridgeRelease` moves zk to payment UTxOs; `bridgeReleaseLockUtxo` (burn mode) is skipped above,
+        // so negative-mint supply burn must happen here when those UTxOs are still spendable by the bridge mnemonic.
+        const burnAfter = await tryBurnSyntheticHeldByBridgeWallet({
+          asset: job.intent.asset,
+          amountStr: job.intent.amount,
+          logger,
+        });
+        const jAfterBurn = getJob(id);
+        const burnLine = burnAfter.ok
+          ? burnAfter.detail
+          : `WARN synthetic supply burn skipped: ${burnAfter.detail}`;
+        patchJob(id, {
+          destinationHint: `${jAfterBurn?.destinationHint ?? hint}\n${burnLine}`,
+        });
+        if (!burnAfter.ok) {
+          logger.warn({ id, detail: burnAfter.detail }, 'cardano BURN: post-BridgeRelease synthetic burn did not run');
+          if (process.env.RELAYER_CARDANO_BURN_AFTER_USER_RELEASE_STRICT === 'true') {
+            throw new Error(
+              `Cardano BURN: ${burnAfter.detail} Set RELAYER_CARDANO_BURN_AFTER_USER_RELEASE_STRICT=false to allow destination unlock anyway, or ensure zk sits on UTxOs derived from RELAYER_CARDANO_WALLET_MNEMONIC.`,
+            );
+          }
+        } else {
+          logger.info({ id, txHash: burnAfter.txHash }, 'cardano BURN: post-BridgeRelease synthetic supply burned');
+        }
       } else if (!src?.txHash || src.outputIndex === undefined) {
         throw new Error(
           'Cardano BURN: intent.source.cardano.txHash and outputIndex are required so the relayer can spend lock_pool or verify spendTxHash',
@@ -479,8 +500,11 @@ async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKe
     }
 
     // BURN from any source (EVM, Cardano, Midnight): operator pool unlock when inclusion proof path was not used.
+    // Midnight → EVM is handled **after** `runMidnightBurnPipeline` below: paying out the pool before `finalizeBurn`
+    // completes can stall or fail (job sits in `destination_handoff` while ZK burn steps run, or wrong ordering vs SRS).
     if (
       job.intent.operation === 'BURN' &&
+      job.intent.sourceChain !== 'midnight' &&
       !evmBurnUnlockDone &&
       looksLikeEvmAddress(job.intent.recipient) &&
       process.env.RELAYER_EVM_POOL_LOCK &&
@@ -631,7 +655,7 @@ async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKe
     }
 
     // LOCK → Midnight: registerDeposit → proveHolder → mintWrappedUnshielded on registry contract.
-    if (job.intent.operation === 'LOCK' && destLabel(job.intent).includes('midnight') && isMidnightBridgeEnabled()) {
+    if (job.intent.operation === 'LOCK' && destLabel(job.intent).includes('midnight') && isMidnightRelayerInitEnabled()) {
       try {
         const mintArgs = buildMintPipelineArgs(job.intent, job.lockRef);
         const extra = await runMidnightMintPipeline(logger, mintArgs, job.intent.recipient);
@@ -648,9 +672,9 @@ async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKe
 
     // BURN from Midnight: relayer must run registry finalizeBurn (on-chain destruction); never complete the job without it.
     if (job.intent.operation === 'BURN' && job.intent.sourceChain === 'midnight') {
-      if (!isMidnightBridgeEnabled()) {
+      if (!isMidnightRelayerInitEnabled()) {
         throw new Error(
-          'Midnight BURN requires RELAYER_MIDNIGHT_ENABLED=true so the relayer can run sendWrappedUnshieldedToUser + finalizeBurn on zk-stables-registry',
+          'Midnight BURN requires RELAYER_MIDNIGHT_ENABLED=true or RELAYER_OPERATOR_CONSOLE_MIDNIGHT_TX / RELAYER_OPERATOR_CONSOLE_ALL (with wallet + contract) so the relayer can run sendWrappedUnshieldedToUser + finalizeBurn on zk-stables-registry',
         );
       }
       const relMid = await ensureMidnightRelayer(logger);
@@ -685,6 +709,52 @@ async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKe
       } catch (e) {
         logger.error({ err: e, id }, 'midnight burn pipeline failed');
         throw e;
+      }
+    }
+
+    // Midnight BURN → EVM recipient: operator pool unlock **after** registry `finalizeBurn` (see early-exclude above).
+    if (
+      job.intent.operation === 'BURN' &&
+      job.intent.sourceChain === 'midnight' &&
+      !evmBurnUnlockDone &&
+      looksLikeEvmAddress(job.intent.recipient) &&
+      process.env.RELAYER_EVM_POOL_LOCK &&
+      process.env.RELAYER_EVM_PRIVATE_KEY
+    ) {
+      const underlying = resolveUnderlyingTokenForAsset(job.intent.asset);
+      if (!underlying) {
+        logger.warn(
+          { id, asset: job.intent.asset },
+          'Midnight→EVM: cross-chain claim skipped: missing RELAYER_EVM_UNDERLYING_TOKEN (and optional RELAYER_EVM_UNDERLYING_TOKEN_USDT)',
+        );
+      } else {
+        const bc = job.intent.burnCommitmentHex.replace(/^0x/i, '').trim().toLowerCase();
+        if (bc.length !== 64 || !/^[0-9a-f]+$/u.test(bc)) {
+          logger.warn({ id }, 'Midnight→EVM: cross-chain claim skipped: invalid burnCommitmentHex');
+        } else {
+          try {
+            const pk = process.env.RELAYER_EVM_PRIVATE_KEY as `0x${string}`;
+            const pool = process.env.RELAYER_EVM_POOL_LOCK as `0x${string}`;
+            const amountUnits = burnJobAmountRawUnits(job.intent);
+            logger.info({ id }, 'Midnight→EVM: operator pool unlock (after Midnight finalizeBurn)');
+            const { txHash } = await withEvmMutex(() => evmPoolUnlockOperator({
+              rpcUrl,
+              privateKey: pk,
+              poolLock: pool,
+              underlyingToken: underlying,
+              recipient: job.intent.recipient as `0x${string}`,
+              amount: amountUnits,
+              burnCommitment: `0x${bc}` as `0x${string}`,
+            }));
+            const j = getJob(id);
+            patchJob(id, {
+              destinationHint: `${j?.destinationHint ?? hint}\nEVM underlying payout (operator unlock): ${txHash}`,
+            });
+          } catch (e) {
+            logger.error({ err: e, id }, 'Midnight→EVM: cross-chain EVM pool unlock failed');
+            throw e;
+          }
+        }
       }
     }
 

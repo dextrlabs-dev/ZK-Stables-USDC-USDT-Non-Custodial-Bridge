@@ -7,6 +7,7 @@
     "deploy": "tsx src/deploy-local.ts",
     "run-all": "tsx src/run-all-operations.ts",
     "run-genesis": "tsx src/run-genesis-all.ts",
+    "fund-genesis-wallet": "GENESIS_FUND_ONLY=1 tsx src/run-genesis-all.ts",
     "run-registry-all": "tsx src/run-registry-all-operations.ts"
   },
   "dependencies": {

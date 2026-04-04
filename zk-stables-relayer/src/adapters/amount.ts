@@ -1,4 +1,17 @@
 /** Parse a decimal string (e.g. stablecoin UI amount) into integer token units. */
+/** Stablecoin-style display: integer units → decimal string (no scientific notation). */
+export function formatTokenUnitsToDecimal(units: bigint, decimals: number): string {
+  const neg = units < 0n;
+  const x = neg ? -units : units;
+  const base = 10n ** BigInt(decimals);
+  const whole = x / base;
+  const frac = x % base;
+  if (frac === 0n) return (neg ? '-' : '') + whole.toString();
+  let fs = frac.toString().padStart(decimals, '0');
+  fs = fs.replace(/0+$/u, '');
+  return (neg ? '-' : '') + `${whole}.${fs}`;
+}
+
 export function parseDecimalAmountToUnits(amountStr: string, decimals: number): bigint {
   const s = amountStr.trim().replace(/,/g, '');
   if (!s) throw new Error('empty amount');
