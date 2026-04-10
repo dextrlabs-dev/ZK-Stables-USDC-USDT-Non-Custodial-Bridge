@@ -16,8 +16,15 @@ export function cardanoDedupeKeyFromIntent(intent: BridgeIntent): string | undef
 
 export function burnCommitmentDedupeKey(intent: BridgeIntent): string | undefined {
   if (intent.operation !== 'BURN') return undefined;
-  const bc = (intent as BurnIntent).burnCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase();
+  const burn = intent as BurnIntent;
+  const bc = burn.burnCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase();
   if (!bc || bc.length !== 64 || !/^[0-9a-f]+$/u.test(bc)) return undefined;
+  if (burn.sourceChain === 'midnight') {
+    const dep = burn.source?.midnight?.depositCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase();
+    if (dep && dep.length === 64 && /^[0-9a-f]+$/u.test(dep)) {
+      return `midnight:${dep}`;
+    }
+  }
   return bc;
 }
 

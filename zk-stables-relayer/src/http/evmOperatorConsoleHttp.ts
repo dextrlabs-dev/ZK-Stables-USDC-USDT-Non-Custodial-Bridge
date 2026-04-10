@@ -302,9 +302,18 @@ export async function handlePostEvmOperatorRedeemToEvm(c: Context, logger: Logge
   const asset = assetRaw as 'USDC' | 'USDT';
   const amount = String(bodyIn.amount ?? '').trim();
   if (!amount) return c.json({ error: 'amount required (decimal string)' }, 400);
-  const payout = String(bodyIn.evmPayout ?? '').trim();
+  let payout = String(bodyIn.evmPayout ?? '').trim();
+  if (!payout) {
+    const pk = process.env.RELAYER_EVM_PRIVATE_KEY?.trim();
+    if (pk && /^0x[0-9a-fA-F]{64}$/u.test(pk)) {
+      try {
+        const { privateKeyToAccount } = await import('viem/accounts');
+        payout = privateKeyToAccount(pk as `0x${string}`).address;
+      } catch { /* fall through */ }
+    }
+  }
   if (!isAddress(payout)) {
-    return c.json({ error: 'evmPayout must be a 0x + 40 hex EVM address (recipientOnSource for burn)' }, 400);
+    return c.json({ error: 'evmPayout must be a 0x + 40 hex EVM address' }, 400);
   }
 
   try {

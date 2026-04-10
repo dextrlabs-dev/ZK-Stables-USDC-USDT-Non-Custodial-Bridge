@@ -1,5 +1,10 @@
 import type { RelayerJob } from './types.js';
 
+/** Block number at which the current relayer session started. Events before this are ignored by watchers. */
+let evmStartBlock: bigint | null = null;
+export function setEvmStartBlock(block: bigint): void { evmStartBlock = block; }
+export function getEvmStartBlock(): bigint | null { return evmStartBlock; }
+
 const jobs = new Map<string, RelayerJob>();
 /** Deduplicate watcher-driven jobs (e.g. same burn log on relayer restart). */
 const processedEvmEvents = new Set<string>();

@@ -22,7 +22,8 @@ const poolAbi = [
 /**
  * Operator-only `ZkStablesPoolLock.unlock` — used when zk was burned on Cardano/Midnight and the user
  * claims underlying USDC/USDT on EVM (no Merkle proof; stub / demo parity with cross-chain burn binding).
- * `burnNonce` must match a fresh slot; we use the 32-byte `burnCommitmentHex` from the intent.
+ * `burnNonce` must be unique per payout: same bridge recipient can repeat `recipientComm` across deposits,
+ * so Midnight→EVM uses the ledger `depositCommitmentHex` when available; otherwise the burn anchor hex.
  */
 export async function evmPoolUnlockOperator(params: {
   rpcUrl: string;
@@ -31,7 +32,7 @@ export async function evmPoolUnlockOperator(params: {
   underlyingToken: Address;
   recipient: Address;
   amount: bigint;
-  /** 32-byte value, typically `burnCommitmentHex` from the off-chain burn anchor. */
+  /** 32-byte pool `burnNonce` (hex): prefer ledger deposit id for Midnight→EVM, else burn anchor / recipientComm. */
   burnCommitment: Hex;
 }): Promise<{ txHash: Hex }> {
   await assertPoolUnderlyingSufficient({

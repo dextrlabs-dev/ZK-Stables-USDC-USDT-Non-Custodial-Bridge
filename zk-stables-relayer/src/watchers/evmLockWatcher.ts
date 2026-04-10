@@ -3,6 +3,7 @@ import type { Address } from 'viem';
 import { fetchLockEvents } from '../adapters/evmLocks.js';
 import { mergeRelayerBridgeIntoConnected, relayerBridgeEvmRecipient } from '../config/bridgeRecipients.js';
 import { enqueueLockIntent } from '../pipeline/runJob.js';
+import { getEvmStartBlock } from '../store.js';
 
 /** Map pool-locked ERC20 to USDC vs USDT using the same env vars as the burn watcher / unlock paths. */
 function assetFromLockedToken(token: Address, logger: Logger): { asset: 'USDC' | 'USDT'; assetKind: number } {
@@ -56,7 +57,9 @@ export async function runEvmLockWatcher(logger: Logger): Promise<void> {
     );
   }
 
-  let cursor = BigInt(process.env.RELAYER_EVM_FROM_BLOCK ?? 0);
+  const startBlock = getEvmStartBlock();
+  const envFrom = process.env.RELAYER_EVM_FROM_BLOCK?.trim();
+  let cursor = startBlock ?? (envFrom ? BigInt(envFrom) : 0n);
 
   for (;;) {
     try {

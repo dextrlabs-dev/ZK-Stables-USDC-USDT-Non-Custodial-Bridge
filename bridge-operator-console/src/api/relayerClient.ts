@@ -197,6 +197,8 @@ export type EvmBurnHint = {
 export type BridgeConsoleState = {
   recipients: Recipients & { configured: { evm: boolean; cardano: boolean; midnight: boolean } };
   amountPresets: string[];
+  /** EVM address from RELAYER_EVM_PRIVATE_KEY — same signer as pool lock/unlock; default redeem payout in UI. */
+  evmOperatorAddress?: string | null;
   /** When true, relayer accepts POST /v1/evm/execute-lock and /v1/evm/execute-burn (operator EVM key). */
   evmOperatorConsoleTx?: boolean;
   /** POST /v1/cardano/operator/* (Mesh + indexer). */
@@ -377,6 +379,7 @@ async function bridgeConsoleStateFallback(): Promise<BridgeConsoleState> {
   return {
     recipients,
     amountPresets: ['0.01', '0.05', '0.1', '1'],
+    evmOperatorAddress: null,
     evmOperatorConsoleTx: false,
     cardanoOperatorConsoleTx: false,
     midnightOperatorConsoleTx: false,
@@ -554,7 +557,7 @@ export async function postMidnightOperatorRedeemToEvm(body: { asset: string; amo
 }
 
 export type BalanceRow = { raw: string; display: string } | null;
-export type CardanoBalanceRow = { raw: string; display: string; unit: string };
+export type CardanoBalanceRow = { raw: string; display: string; unit: string; label?: string };
 
 export type BalancesResponse = {
   evm: {

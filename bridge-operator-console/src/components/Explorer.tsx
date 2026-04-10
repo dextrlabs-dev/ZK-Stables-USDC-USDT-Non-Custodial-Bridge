@@ -10,6 +10,10 @@ function phaseBadgeClass(phase: string): string {
   return 'ex-badge ex-badge--active';
 }
 
+function routeInvolvesMidnight(intent: JobApiRow['intent']): boolean {
+  return intent.sourceChain === 'midnight' || intent.destinationChain === 'midnight';
+}
+
 function truncHash(h: string | undefined | null, len = 10): string {
   if (!h) return '—';
   const s = h.replace(/^0x/i, '');
@@ -141,7 +145,6 @@ function JobDetail({ job, onBack }: { job: JobApiRow; onBack: () => void }) {
           <KV label="Created" value={job.createdAt ? new Date(job.createdAt).toLocaleString() : undefined} />
           <KV label="Updated" value={job.updatedAt ? new Date(job.updatedAt).toLocaleString() : undefined} />
           <KV label="Lock Ref" value={job.lockRef} mono />
-          <KV label="Dest Hint" value={job.destinationHint} />
         </div>
 
         <div className="ex-detail-section">
@@ -159,12 +162,22 @@ function JobDetail({ job, onBack }: { job: JobApiRow; onBack: () => void }) {
           <h4 className="ex-detail-section-title">Commitments</h4>
           <KV label="Burn Commitment" value={intent.burnCommitmentHex ? truncHash(intent.burnCommitmentHex, 12) : undefined} mono />
           <KV label="Deposit Commitment" value={job.depositCommitmentHex ? truncHash(job.depositCommitmentHex, 12) : undefined} mono />
+          {routeInvolvesMidnight(intent) && intent.operation === 'LOCK' ? (
+            <p className="ex-detail-note">
+              LOCK / mint jobs do not use burn or deposit commitment fields. The binding is the source lock (for example EVM pool nonce in Source Chain Data).
+            </p>
+          ) : routeInvolvesMidnight(intent) && intent.operation === 'BURN' && !job.depositCommitmentHex ? (
+            <p className="ex-detail-note">
+              Deposit commitment is computed when the job reaches destination handoff (after proving). If burn commitment is also missing, this job predates that field or used a path that omits it.
+            </p>
+          ) : routeInvolvesMidnight(intent) && !intent.burnCommitmentHex && !job.depositCommitmentHex ? (
+            <p className="ex-detail-note">No commitment fields on this job record.</p>
+          ) : null}
         </div>
 
         {job.proofBundle && (
           <div className="ex-detail-section">
             <h4 className="ex-detail-section-title">Proof</h4>
-            <KV label="Algorithm" value={job.proofBundle.algorithm} />
             <KV label="Digest" value={job.proofBundle.digest ? truncHash(job.proofBundle.digest, 12) : undefined} mono />
           </div>
         )}

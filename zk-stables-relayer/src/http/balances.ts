@@ -2,15 +2,17 @@ import { Buffer } from 'node:buffer';
 import type { Context } from 'hono';
 import type { Logger } from 'pino';
 import { createPublicClient, http, type Address } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { foundry } from 'viem/chains';
 import { ContractState as MidnightOnchainContractState } from '@midnight-ntwrk/compact-runtime';
 import { getPublicStates } from '@midnight-ntwrk/midnight-js-contracts';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import type { ContractState as LedgerWasmContractState } from '@midnight-ntwrk/ledger-v8';
 import { ZkStablesRegistry } from '@zk-stables/midnight-contract';
+import { ForgeScript, resolveScriptHash, stringToHex } from '@meshsdk/core';
 import { resolveUnderlyingTokenForAsset } from '../adapters/evmUnderlying.js';
+import { cardanoBridgeTokenName } from '../adapters/cardanoMintPayout.js';
 import { ensureCardanoBridgeWallet } from '../adapters/cardanoPayout.js';
-import { relayerBridgeSnapshot } from '../config/bridgeRecipients.js';
 import { getMidnightContractAddress } from '../midnight/service.js';
 import { RelayerMidnightConfig } from '../midnight/config.js';
 
@@ -42,10 +44,16 @@ async function readEvmBalance(pub: ReturnType<typeof createPublicClient>, token:
 export async function handleGetBalances(c: Context, logger: Logger) {
   const rpc = process.env.RELAYER_EVM_RPC_URL ?? 'http://127.0.0.1:8545';
   const pub = createPublicClient({ chain: foundry, transport: http(rpc) });
-  const bridge = relayerBridgeSnapshot();
-  const evmOperator = (process.env.RELAYER_EVM_PRIVATE_KEY?.trim() ?? '').startsWith('0x')
-    ? bridge.evmRecipient ?? process.env.RELAYER_BRIDGE_EVM_RECIPIENT?.trim()
-    : undefined;
+  const pk = process.env.RELAYER_EVM_PRIVATE_KEY?.trim() as `0x${string}` | undefined;
+  let evmOperator: string | undefined;
+  if (pk && /^0x[0-9a-fA-F]{64}$/u.test(pk)) {
+    try {
+      evmOperator = privateKeyToAccount(pk).address;
+    } catch { /* fallback below */ }
+  }
+  if (!evmOperator) {
+    evmOperator = process.env.RELAYER_BRIDGE_EVM_RECIPIENT?.trim();
+  }
 
   const pool = process.env.RELAYER_EVM_LOCK_ADDRESS?.trim() as Address | undefined;
 
@@ -93,9 +101,25 @@ export async function handleGetBalances(c: Context, logger: Logger) {
       }
 
       const decimals = Number(process.env.RELAYER_CARDANO_ASSET_DECIMALS ?? 6);
-      const bals: Record<string, { raw: string; display: string; unit: string }> = {};
+      const bridgeUnitToLabel = new Map<string, string>();
+      try {
+        const forgingScript = ForgeScript.withOneSignature(walletAddr);
+        const policyId = resolveScriptHash(forgingScript);
+        bridgeUnitToLabel.set(`${policyId}${stringToHex(cardanoBridgeTokenName('USDC'))}`, 'zkUSDC');
+        bridgeUnitToLabel.set(`${policyId}${stringToHex(cardanoBridgeTokenName('USDT'))}`, 'zkUSDT');
+      } catch {
+        /* policy derivation failed — rows still have unit + display */
+      }
+
+      const bals: Record<string, { raw: string; display: string; unit: string; label?: string }> = {};
       for (const [unit, raw] of m) {
-        bals[unit] = { raw: raw.toString(), display: formatUnits(raw, unit === 'lovelace' ? 6 : decimals), unit };
+        const label = bridgeUnitToLabel.get(unit);
+        bals[unit] = {
+          raw: raw.toString(),
+          display: formatUnits(raw, unit === 'lovelace' ? 6 : decimals),
+          unit,
+          ...(label ? { label } : {}),
+        };
       }
       cardano = {
         address: walletAddr,

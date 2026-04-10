@@ -48,7 +48,7 @@ import {
   handlePostEvmOperatorMint,
   handlePostEvmOperatorRedeemToEvm,
 } from './http/evmOperatorConsoleHttp.js';
-import { handlePostCardanoOperatorMint, handlePostCardanoOperatorRedeemToEvm } from './http/cardanoOperatorConsoleHttp.js';
+import { handlePostCardanoOperatorMint, handlePostCardanoOperatorRedeemToEvm, handlePostCardanoOperatorSweepLocks } from './http/cardanoOperatorConsoleHttp.js';
 import { handlePostMidnightOperatorRedeemToEvm } from './http/midnightOperatorConsoleHttp.js';
 import { handleGetBalances } from './http/balances.js';
 
@@ -197,6 +197,9 @@ app.post('/v1/cardano/operator/mint', (c) => handlePostCardanoOperatorMint(c, lo
 
 /** Operator console: scan lock_pool + enqueue BURN to EVM (same Cardano operator gate). */
 app.post('/v1/cardano/operator/redeem-to-evm', (c) => handlePostCardanoOperatorRedeemToEvm(c, logger));
+
+/** Burn-release all stale lock UTxOs at the Cardano lock_pool script (negative mint + ADA back to wallet). */
+app.post('/v1/cardano/operator/sweep-locks', (c) => handlePostCardanoOperatorSweepLocks(c, logger));
 
 app.get('/v1/midnight/contract', async (c) => {
   const addr = await getMidnightContractAddress();
@@ -423,6 +426,22 @@ app.get('/v1/jobs/:id', (c) => {
   if (!j) return c.json({ error: 'not found' }, 404);
   return c.json(serializeRelayerJob(j));
 });
+
+// Record current EVM block so watchers only process events from this session forward.
+{
+  const rpc = process.env.RELAYER_EVM_RPC_URL ?? 'http://127.0.0.1:8545';
+  const { createPublicClient: cpc, http: httpT } = await import('viem');
+  const { foundry: f } = await import('viem/chains');
+  const { setEvmStartBlock } = await import('./store.js');
+  try {
+    const pub = cpc({ chain: f, transport: httpT(rpc) });
+    const tip = await pub.getBlockNumber();
+    setEvmStartBlock(tip);
+    logger.info({ evmStartBlock: tip.toString() }, 'watchers will only process events from this block onward');
+  } catch (e) {
+    logger.warn({ err: e }, 'could not fetch EVM block number for watcher start — watchers will scan from block 0');
+  }
+}
 
 // EVM + Cardano watchers (SRS still allows HTTP POST anchors; pool watcher is optional).
 if (process.env.RELAYER_EVM_LOCK_WATCHER_ENABLED === 'true' || process.env.RELAYER_EVM_LOCK_WATCHER_ENABLED === '1') {

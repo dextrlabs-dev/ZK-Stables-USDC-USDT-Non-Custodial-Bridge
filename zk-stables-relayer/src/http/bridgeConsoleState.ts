@@ -231,9 +231,21 @@ export async function handleBridgeConsoleState(c: Context, logger: Logger) {
 
   const operatorWallet = await meshOperatorWallet(logger);
 
+  let evmOperatorAddress: string | null = null;
+  const pk = process.env.RELAYER_EVM_PRIVATE_KEY?.trim();
+  if (pk && /^0x[0-9a-fA-F]{64}$/u.test(pk)) {
+    try {
+      const { privateKeyToAccount } = await import('viem/accounts');
+      evmOperatorAddress = privateKeyToAccount(pk as `0x${string}`).address;
+    } catch {
+      evmOperatorAddress = null;
+    }
+  }
+
   return c.json({
     recipients,
     amountPresets: ['0.01', '0.05', '0.1', '1'],
+    evmOperatorAddress,
     evmOperatorConsoleTx: isRelayerEvmOperatorConsoleTxEnabled(),
     cardanoOperatorConsoleTx: isRelayerCardanoOperatorConsoleTxEnabled(),
     midnightOperatorConsoleTx: isRelayerMidnightOperatorConsoleTxEnabled(),

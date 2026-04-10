@@ -160,9 +160,21 @@ export async function handlePostMidnightOperatorRedeemToEvm(c: Context, logger: 
   const asset = assetRaw as 'USDC' | 'USDT';
   const amount = String(body.amount ?? '').trim();
   if (!amount) return c.json({ error: 'amount required (decimal string)' }, 400);
-  const payoutRaw = String(body.evmPayout ?? relayerBridgeEvmRecipient() ?? '').trim();
+  let payoutRaw = String(body.evmPayout ?? '').trim();
+  if (!payoutRaw) {
+    const pk = process.env.RELAYER_EVM_PRIVATE_KEY?.trim();
+    if (pk && /^0x[0-9a-fA-F]{64}$/u.test(pk)) {
+      try {
+        const { privateKeyToAccount } = await import('viem/accounts');
+        payoutRaw = privateKeyToAccount(pk as `0x${string}`).address;
+      } catch { /* fall through */ }
+    }
+  }
+  if (!payoutRaw) {
+    payoutRaw = relayerBridgeEvmRecipient() ?? '';
+  }
   if (!isAddress(payoutRaw)) {
-    return c.json({ error: 'evmPayout must be a 0x + 40 hex EVM address (or set RELAYER_BRIDGE_EVM_RECIPIENT)' }, 400);
+    return c.json({ error: 'evmPayout must be a 0x + 40 hex EVM address (or set RELAYER_EVM_PRIVATE_KEY / RELAYER_BRIDGE_EVM_RECIPIENT)' }, 400);
   }
   const payout = payoutRaw as `0x${string}`;
 

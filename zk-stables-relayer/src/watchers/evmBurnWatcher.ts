@@ -4,6 +4,7 @@ import { foundry } from 'viem/chains';
 import type { Address, Hex } from 'viem';
 import { mergeRelayerBridgeIntoConnected } from '../config/bridgeRecipients.js';
 import { enqueueLockIntent } from '../pipeline/runJob.js';
+import { getEvmStartBlock } from '../store.js';
 
 const burnedEvent = parseAbiItem(
   'event Burned(address indexed from,address indexed recipientOnSource,uint256 amount,bytes32 nonce,bytes32 burnCommitment)',
@@ -38,7 +39,9 @@ export async function runEvmBurnWatcher(logger: Logger): Promise<void> {
 
   const pollMs = Number(process.env.RELAYER_EVM_POLL_MS ?? 2000);
   const confirmations = BigInt(process.env.RELAYER_EVM_CONFIRMATIONS ?? 0);
-  let cursor = BigInt(process.env.RELAYER_EVM_BURN_FROM_BLOCK ?? 0);
+  const startBlock = getEvmStartBlock();
+  const envFrom = process.env.RELAYER_EVM_BURN_FROM_BLOCK?.trim();
+  let cursor = startBlock ?? (envFrom ? BigInt(envFrom) : 0n);
 
   const client = createPublicClient({ chain: foundry, transport: http(rpcUrl) });
 

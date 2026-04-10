@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchBalances, type BalanceRow, type BalancesResponse } from '../api/relayerClient';
+import { fetchBalances, type BalanceRow, type BalancesResponse, type CardanoBalanceRow } from '../api/relayerClient';
 
 function Tok({ label, bal, accent }: { label: string; bal: BalanceRow | undefined; accent?: boolean }) {
   const v = bal?.display ?? '—';
@@ -17,6 +17,33 @@ function Addr({ label, addr }: { label: string; addr: string | null | undefined 
   return <div className="ap-addr"><span className="ap-addr-label">{label}</span><code className="mono">{short}</code></div>;
 }
 
+/** Decode Cardano asset name hex to UTF-8 in the browser (no Node Buffer). */
+function hexAssetNameToLabel(assetNameHex: string): string {
+  if (!assetNameHex || assetNameHex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/u.test(assetNameHex)) {
+    return assetNameHex.length > 14 ? `${assetNameHex.slice(0, 10)}…` : assetNameHex;
+  }
+  try {
+    const bytes = new Uint8Array(assetNameHex.length / 2);
+    for (let i = 0; i < assetNameHex.length; i += 2) {
+      bytes[i / 2] = Number.parseInt(assetNameHex.slice(i, i + 2), 16);
+    }
+    const s = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    if (/^[\x20-\x7e]+$/u.test(s) && s.length > 0) {
+      if (/^WUSDC$/iu.test(s)) return 'zkUSDC';
+      if (/^WUSDT$/iu.test(s)) return 'zkUSDT';
+      return s;
+    }
+  } catch { /* fall through */ }
+  return assetNameHex.length > 14 ? `${assetNameHex.slice(0, 10)}…` : assetNameHex;
+}
+
+function cardanoNativeTokenLabel(unit: string, row: CardanoBalanceRow): string {
+  if (row.label?.trim()) return row.label.trim();
+  const nameHex = unit.length > 56 ? unit.slice(56) : '';
+  if (!nameHex) return unit.length > 16 ? `${unit.slice(0, 12)}…` : unit;
+  return hexAssetNameToLabel(nameHex);
+}
+
 function CardanoBalances({ cardano }: { cardano: BalancesResponse['cardano'] }) {
   if (!cardano) return <p className="ap-none">Cardano wallet not connected</p>;
 
@@ -31,12 +58,9 @@ function CardanoBalances({ cardano }: { cardano: BalancesResponse['cardano'] }) 
       {lovelace && <Tok label="ADA" bal={{ raw: lovelace.raw, display: lovelace.display }} />}
       {tokens.length === 0 && <p className="ap-none">No native tokens</p>}
       {tokens.map(([unit, row]) => {
-        const name = unit.length > 56 ? unit.slice(56) : unit;
-        const hex = name;
-        let decoded = hex;
-        try { decoded = Buffer.from(hex, 'hex').toString('utf8'); } catch { /* keep hex */ }
-        const isZk = /^(W|zk)/i.test(decoded);
-        return <Tok key={unit} label={decoded || unit.slice(0, 16)} bal={row} accent={isZk} />;
+        const label = cardanoNativeTokenLabel(unit, row);
+        const accent = /zkUSDC|zkUSDT|^WUSDC$|^WUSDT$/iu.test(label);
+        return <Tok key={unit} label={label} bal={row} accent={accent} />;
       })}
     </div>
   );

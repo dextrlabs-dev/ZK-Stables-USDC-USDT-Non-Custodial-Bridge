@@ -60,14 +60,28 @@ export async function runCardanoLockWatcher(logger: Logger): Promise<void> {
     return relayerBridgeMidnightRecipient() ?? '';
   })();
 
+  const preExistingUtxos = new Set<string>();
+  let firstTick = true;
+
   const tick = async () => {
     try {
       const utxos =
         mode === 'yaci'
           ? await yaciAddressUtxos(yaciBase!, address)
           : await blockfrostAddressUtxos(bfId!, bfNet, address);
+
+      if (firstTick) {
+        for (const u of utxos) {
+          preExistingUtxos.add(cardanoUtxoDedupeKey(u.tx_hash, u.output_index));
+        }
+        firstTick = false;
+        logger.info({ preExisting: preExistingUtxos.size }, 'cardanoLockWatcher: skipping pre-existing UTxOs from before this session');
+        return;
+      }
+
       for (const u of utxos) {
         const key = cardanoUtxoDedupeKey(u.tx_hash, u.output_index);
+        if (preExistingUtxos.has(key)) continue;
         if (isCardanoUtxoInflightOrDone(key)) continue;
 
         const tx = mode === 'yaci' ? await yaciTx(yaciBase!, u.tx_hash) : await blockfrostTx(bfId!, bfNet, u.tx_hash);

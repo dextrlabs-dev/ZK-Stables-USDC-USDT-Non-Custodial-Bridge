@@ -23,6 +23,7 @@ import {
   postMidnightOperatorRedeemToEvm,
 } from '../api/relayerClient';
 import { assetKind, type Stable } from '../lib/assets';
+import { normalizeEvmPayoutAddr } from '../lib/evmPayout';
 import { is0xTx64, normHex64 } from '../lib/hex';
 
 type Flow = 'mint' | 'redeem-cardano' | 'redeem-midnight' | 'redeem-evm';
@@ -33,21 +34,6 @@ function recipientForDest(r: BridgeConsoleState['recipients'], dest: Dest): stri
   if (dest === 'cardano') return r.cardanoRecipient;
   if (dest === 'midnight') return r.midnightRecipient;
   return r.evmRecipient;
-}
-
-function redeemLabel(s: RedeemSrc): string {
-  if (s === 'cardano') return 'Cardano';
-  if (s === 'midnight') return 'Midnight';
-  return 'EVM';
-}
-
-/** Accepts `0x` + 40 hex or bare 40 hex; returns lowercase `0x…` or empty. */
-function normalizeEvmPayoutAddr(raw: string): `0x${string}` | '' {
-  const t = raw.trim();
-  if (!t) return '';
-  const with0x = /^0x/i.test(t) ? t : `0x${t}`;
-  const lc = with0x.toLowerCase();
-  return /^0x[0-9a-f]{40}$/u.test(lc) ? (lc as `0x${string}`) : '';
 }
 
 /** Cardano / Midnight 32-byte tx id: 64 hex, optional 0x. */
@@ -240,12 +226,14 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
 
   const amountOk = amount.trim() !== '' && Number.parseFloat(amount) > 0;
 
-  /** EVM underlying payout: optional field, else relayer `RELAYER_BRIDGE_EVM_RECIPIENT`. */
+  /** EVM underlying payout: override input, else operator signer (`evmOperatorAddress`), else `RELAYER_BRIDGE_EVM_RECIPIENT`. */
   const evmPayoutResolved = useMemo(() => {
     const fromInput = payoutAddress.trim();
-    const fromRelayer = state?.recipients.evmRecipient?.trim() ?? '';
-    return normalizeEvmPayoutAddr(fromInput || fromRelayer);
-  }, [payoutAddress, state?.recipients.evmRecipient]);
+    if (fromInput) return normalizeEvmPayoutAddr(fromInput);
+    const fromOperator = state?.evmOperatorAddress?.trim() ?? '';
+    const fromBridge = state?.recipients.evmRecipient?.trim() ?? '';
+    return normalizeEvmPayoutAddr(fromOperator || fromBridge);
+  }, [payoutAddress, state?.evmOperatorAddress, state?.recipients.evmRecipient]);
 
   const operatorRedeemBypass =
     (redeemSrc === 'cardano' && Boolean(state?.cardanoOperatorConsoleTx)) ||
@@ -938,7 +926,6 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
           >
             <option value="cardano">Cardano</option>
             <option value="midnight">Midnight</option>
-            <option value="evm">EVM (wrapped)</option>
           </select>
         </div>
       )}
@@ -947,16 +934,7 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
         <div className="ab-route ab-route--split">
           <div className="ab-route-block">
             <div className="ab-route-label">You send</div>
-            <p className="ab-field-hint ab-field-hint--tight" style={{ marginTop: 0 }}>
-              <strong>Amount</strong> + <strong>asset</strong> → <strong>Send</strong>. Resolves <code className="mono">Locked</code> on-chain or LOCK job anchors, then posts mint.
-              {state.evmOperatorConsoleTx ? (
-                <>
-                  {' '}
-                  If nothing matches yet, the relayer can submit the pool lock for you on Send.
-                </>
-              ) : null}
-            </p>
-            <div className="ab-field" style={{ marginTop: 'var(--space-4)' }}>
+            <div className="ab-field" style={{ marginTop: 'var(--space-2)' }}>
               <label htmlFor="mint-amount">Amount</label>
               <input
                 id="mint-amount"
@@ -984,12 +962,7 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
             </div>
 
             {operatorMintBypass ? (
-              <div className="ab-field">
-                <label>Operator mode</label>
-                <p className="ab-field-hint">
-                  Operator mode active — enter amount and press <strong>Send</strong>. The relayer will execute the EVM pool lock on-chain and enqueue the mint job automatically.
-                </p>
-              </div>
+              <p className="ab-field-hint">Operator mode — amount + Send.</p>
             ) : (
               <>
                 {mintResolveLoading && (
@@ -1026,11 +999,7 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
                       <span style={{ color: 'var(--text-faint)' }}>({selectedMintLock?.source})</span>
                     </p>
                   </div>
-                ) : !mintResolveLoading ? (
-                  <p className="ab-field-hint">
-                    No lock in preview yet — set amount and asset, then press Send to resolve and mint.
-                  </p>
-                ) : null}
+                ) : !mintResolveLoading ? null : null}
               </>
             )}
           </div>
@@ -1043,16 +1012,15 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
               <div className="ab-field">
                 <label htmlFor="op-dest">To chain</label>
                 <select id="op-dest" value={dest} onChange={(e) => setDest(e.target.value as Dest)}>
-                  <option value="cardano">Cardano (zk native)</option>
+                  <option value="cardano">Cardano</option>
                   <option value="midnight">Midnight</option>
-                  <option value="evm">EVM (wrapped zk)</option>
                 </select>
               </div>
             </div>
-            <div className="ab-field" style={{ marginTop: 'var(--space-4)' }}>
-              <label>Recipient (from relayer)</label>
+            <div className="ab-field" style={{ marginTop: 'var(--space-2)' }}>
+              <label>Recipient</label>
               <p className="ab-address-box mono">
-                {recipient?.trim() || `Configure RELAYER_BRIDGE_${dest === 'cardano' ? 'CARDANO' : dest === 'midnight' ? 'MIDNIGHT' : 'EVM'}_RECIPIENT on the relayer.`}
+                {recipient?.trim() || '—'}
               </p>
             </div>
           </div>
@@ -1061,31 +1029,7 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
         <div className="ab-route ab-route--split">
           <div className="ab-route-block">
             <div className="ab-route-label">You burn</div>
-            <p className="ab-field-hint ab-field-hint--tight" style={{ marginTop: 0 }}>
-              <strong>Amount</strong> + <strong>asset</strong> → <strong>Send</strong> (EVM payout uses the relayer default when set).{' '}
-              <em>Relayer jobs</em> + on-chain hints (Cardano <code className="mono">lock_pool</code> / EVM <code className="mono">Burned</code>) when the relayer exposes scan APIs; otherwise <em>Manual</em> ({redeemLabel(redeemSrc)}).
-              {redeemSrc === 'cardano' ? (
-                <>
-                  {' '}
-                  Cardano → EVM: Send scans <code className="mono">lock_pool</code> for this face value on submit even if nothing appears in the preview.
-                </>
-              ) : null}
-              {redeemSrc === 'midnight' ? (
-                <>
-                  {' '}
-                  Midnight → EVM: Send calls <code className="mono">/v1/midnight/recent-burn-hints</code> and, when needed,{' '}
-                  <code className="mono">POST /v1/midnight/initiate-burn</code> before posting the BURN intent.
-                </>
-              ) : null}
-              {state.evmOperatorConsoleTx && redeemSrc === 'evm' ? (
-                <>
-                  {' '}
-                  For EVM (wrapped), Send can run the wrapped burn from the relayer when no hint exists yet.
-                </>
-              ) : null}
-            </p>
-
-            <div className="ab-field" style={{ marginTop: 'var(--space-4)' }}>
+            <div className="ab-field" style={{ marginTop: 'var(--space-2)' }}>
               <label htmlFor="redeem-asset">Asset</label>
               <select id="redeem-asset" value={asset} onChange={(e) => setAsset(e.target.value as Stable)}>
                 <option value="USDC">USDC</option>
@@ -1111,22 +1055,20 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
               </datalist>
             </div>
 
-            {normalizeEvmPayoutAddr(state.recipients.evmRecipient?.trim() ?? '') ? (
+            {normalizeEvmPayoutAddr(state.evmOperatorAddress?.trim() ?? '') ||
+            normalizeEvmPayoutAddr(state.recipients.evmRecipient?.trim() ?? '') ? (
               <div className="ab-field">
                 <label>EVM payout</label>
-                <p className="ab-address-box mono" style={{ margin: 0 }}>
-                  {evmPayoutResolved}{' '}
-                  <span style={{ color: 'var(--text-faint)' }}>(from relayer; override below if needed)</span>
-                </p>
+                <p className="ab-address-box mono" style={{ margin: 0 }}>{evmPayoutResolved}</p>
                 <input
                   id="redeem-payout-override"
                   type="text"
-                  style={{ marginTop: 'var(--space-2)' }}
+                  style={{ marginTop: 'var(--space-1)' }}
                   value={payoutAddress}
                   onChange={(e) => setPayoutAddress(e.target.value)}
-                  placeholder="Optional different 0x payout"
+                  placeholder="Override 0x payout"
                   autoComplete="off"
-                  aria-label="Optional EVM payout override"
+                  aria-label="Override EVM payout"
                 />
               </div>
             ) : (
@@ -1166,9 +1108,7 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
               <div className="ab-field">
                 <label htmlFor="op-hint">{operatorRedeemBypass ? 'Operator mode' : 'Matching burn job'}</label>
                 {operatorRedeemBypass ? (
-                  <p className="ab-field-hint">
-                    Operator mode active — enter amount and press <strong>Send</strong>. The relayer will execute the burn/lock on-chain and enqueue the redeem job automatically.
-                  </p>
+                  <p className="ab-field-hint">Operator mode — amount + Send.</p>
                 ) : matchingBurnHints.length > 0 ? (
                   <select id="op-hint" value={hintJobId} onChange={(e) => setHintJobId(e.target.value)}>
                     {matchingBurnHints.map((h) => (
@@ -1177,22 +1117,8 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
                       </option>
                     ))}
                   </select>
-                ) : redeemSrc === 'cardano' ? (
-                  <p className="ab-field-hint">
-                    No matching preview row yet — press <strong>Send</strong> to resolve a <code className="mono">lock_pool</code> UTxO for this amount (relayer indexer + bridge wallet), or use Manual entry.
-                  </p>
-                ) : redeemSrc === 'midnight' ? (
-                  <p className="ab-field-hint">
-                    No matching preview row yet — press <strong>Send</strong> to load registry deposits for this amount (indexer + contract), run <code className="mono">initiateBurn</code> if required, or use Manual entry.
-                  </p>
-                ) : burnHintsMerged.length > 0 ? (
-                  <p className="ab-field-hint">
-                    No BURN job matches this amount and asset. Change amount or asset, or use Manual entry.
-                  </p>
                 ) : (
-                  <p className="ab-field-hint">
-                    No matching anchors yet. For EVM redeem, configure <code className="mono">recent-burn-hints</code> or operator wrapped burn.
-                  </p>
+                  <p className="ab-field-hint">No match — press Send to resolve, or use Manual.</p>
                 )}
                 {!operatorRedeemBypass && burnScanNote ? <p className="ab-field-hint">{burnScanNote}</p> : null}
               </div>
@@ -1260,9 +1186,8 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
 
           <div className="ab-route-block ab-route-block--receive">
             <div className="ab-route-label">You receive</div>
-            <p className="ab-field-hint ab-field-hint--tight" style={{ marginTop: 0 }}>
-              Underlying on EVM to{' '}
-              {evmPayoutResolved ? <span className="mono">{evmPayoutResolved}</span> : 'the payout address above'}.
+            <p className="ab-field-hint" style={{ marginTop: 0 }}>
+              {evmPayoutResolved ? <span className="mono" style={{ fontSize: '0.68rem' }}>{evmPayoutResolved}</span> : 'EVM payout'}
             </p>
           </div>
         </div>
@@ -1284,75 +1209,6 @@ export function BridgeOperatorForm({ state }: { state: BridgeConsoleState | unde
           <pre className="ab-response ab-response--ok">{JSON.stringify(res as object, null, 2)}</pre>
         ) : null}
       </div>
-
-      <div className="ab-note-strip">
-        <strong>Note.</strong> The relayer validates intents against on-chain state. Wrong lock / burn fields will return{' '}
-        <code className="mono">400</code> with an error message.
-      </div>
-
-      <details className="ab-inspector">
-        <summary>UTxOs & on-chain balances</summary>
-        <div className="ab-inspector-body">
-          <div className="ab-inspector-grid">
-            <div>
-              <h4>Operator wallet</h4>
-              {state.cardano.operatorWallet ? (
-                <>
-                  <p className="ab-field-hint mono" style={{ margin: 0 }}>
-                    {state.cardano.operatorWallet.changeAddress}
-                  </p>
-                  <pre className="ab-json">{JSON.stringify(state.cardano.operatorWallet.balancesByUnit, null, 2)}</pre>
-                  <span className="ab-inspector-label">UTxOs</span>
-                  <select
-                    className="ab-utxo-select"
-                    size={Math.min(8, Math.max(3, state.cardano.operatorWallet.utxos.length))}
-                    aria-label="Operator UTxOs"
-                  >
-                    {state.cardano.operatorWallet.utxos.map((u) => (
-                      <option key={u.ref} value={u.ref}>
-                        {u.ref} · {u.amount.map((a) => `${a.unit.slice(0, 14)}…=${a.quantity}`).join(', ')}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              ) : (
-                <p className="ab-field-hint">Unavailable (Cardano bridge off or no wallet).</p>
-              )}
-            </div>
-            <div>
-              <h4>Lock script</h4>
-              {state.cardano.lockScriptAddress ? (
-                <>
-                  <p className="ab-field-hint mono" style={{ margin: 0 }}>
-                    {state.cardano.lockScriptAddress}
-                  </p>
-                  <p className="ab-field-hint">Indexer: {state.cardano.lockScriptProvider ?? 'none'}</p>
-                  <pre className="ab-json">{JSON.stringify(state.cardano.lockScriptBalancesByUnit, null, 2)}</pre>
-                  <span className="ab-inspector-label">UTxOs</span>
-                  <select
-                    className="ab-utxo-select"
-                    size={Math.min(8, Math.max(3, state.cardano.lockScriptUtxos.length || 3))}
-                    aria-label="Lock script UTxOs"
-                  >
-                    {state.cardano.lockScriptUtxos.length ? (
-                      state.cardano.lockScriptUtxos.map((u) => (
-                        <option key={u.ref} value={u.ref}>
-                          {u.ref} ·{' '}
-                          {u.amount.map((a) => `${a.unit === 'lovelace' ? 'lovelace' : a.unit.slice(0, 16) + '…'}=${a.quantity}`).join(', ')}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">No UTxOs at script</option>
-                    )}
-                  </select>
-                </>
-              ) : (
-                <p className="ab-field-hint">Lock script unavailable.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </details>
     </div>
   );
 }

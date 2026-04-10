@@ -22,7 +22,6 @@ export default function App() {
       <header className="ab-header">
         <div className="ab-brand">
           <span className="ab-brand-mark">ZK-Stables</span>
-          <span className="ab-brand-tag">Operator bridge</span>
         </div>
         <div className="ab-header-actions">
           <ChainStatusBar
@@ -48,8 +47,10 @@ export default function App() {
           ) : (
             <>
               <AccountsPanel />
-              <JobTracker />
-              <BridgeSection consoleState={consoleState.data} />
+              <div className="ab-bridge-jobs">
+                <BridgeSection consoleState={consoleState.data} />
+                <JobTracker />
+              </div>
               {consoleState.error ? (
                 <p className="ab-err ab-err--inline">{(consoleState.error as Error).message}</p>
               ) : null}

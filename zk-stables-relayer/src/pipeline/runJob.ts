@@ -136,7 +136,9 @@ function destinationHint(intent: BridgeIntent, digest: string): string {
     (intent.sourceChain === 'cardano' || intent.sourceChain === 'midnight') &&
     looksLikeEvmAddress(intent.recipient)
   ) {
-    return `EVM claim: underlying ${intent.asset} to ${intent.recipient} via ZkStablesPoolLock.unlock (operator) when RELAYER_EVM_POOL_LOCK + RELAYER_EVM_PRIVATE_KEY and per-asset underlying envs are set; burnNonce = burnCommitmentHex (32 bytes).`;
+    return intent.sourceChain === 'midnight'
+      ? `EVM claim: underlying ${intent.asset} to ${intent.recipient} via ZkStablesPoolLock.unlock (operator); pool burnNonce = depositCommitmentHex (unique per Midnight deposit).`
+      : `EVM claim: underlying ${intent.asset} to ${intent.recipient} via ZkStablesPoolLock.unlock (operator) when RELAYER_EVM_POOL_LOCK + RELAYER_EVM_PRIVATE_KEY and per-asset underlying envs are set; burnNonce = burnCommitmentHex (32 bytes).`;
   }
   const dest = destLabel(intent);
   if (dest.includes('midnight')) {
@@ -728,15 +730,26 @@ async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKe
           'Midnight→EVM: cross-chain claim skipped: missing RELAYER_EVM_UNDERLYING_TOKEN (and optional RELAYER_EVM_UNDERLYING_TOKEN_USDT)',
         );
       } else {
-        const bc = job.intent.burnCommitmentHex.replace(/^0x/i, '').trim().toLowerCase();
-        if (bc.length !== 64 || !/^[0-9a-f]+$/u.test(bc)) {
-          logger.warn({ id }, 'Midnight→EVM: cross-chain claim skipped: invalid burnCommitmentHex');
+        const depHex = job.intent.source?.midnight?.depositCommitmentHex?.replace(/^0x/i, '').trim().toLowerCase() ?? '';
+        const recHex = job.intent.burnCommitmentHex.replace(/^0x/i, '').trim().toLowerCase();
+        /** Pool `burnNonce` must be unique per payout. `recipientComm` repeats across deposits with the same bridge recipient → use ledger deposit id for Midnight→EVM. */
+        const poolBurnNonce =
+          depHex.length === 64 && /^[0-9a-f]+$/u.test(depHex)
+            ? depHex
+            : recHex.length === 64 && /^[0-9a-f]+$/u.test(recHex)
+              ? recHex
+              : '';
+        if (poolBurnNonce.length !== 64) {
+          logger.warn({ id }, 'Midnight→EVM: cross-chain claim skipped: need depositCommitmentHex or burnCommitmentHex (64 hex)');
         } else {
           try {
             const pk = process.env.RELAYER_EVM_PRIVATE_KEY as `0x${string}`;
             const pool = process.env.RELAYER_EVM_POOL_LOCK as `0x${string}`;
             const amountUnits = burnJobAmountRawUnits(job.intent);
-            logger.info({ id }, 'Midnight→EVM: operator pool unlock (after Midnight finalizeBurn)');
+            logger.info(
+              { id, poolNonceFrom: depHex.length === 64 ? 'deposit' : 'recipientComm' },
+              'Midnight→EVM: operator pool unlock (after Midnight finalizeBurn)',
+            );
             const { txHash } = await withEvmMutex(() => evmPoolUnlockOperator({
               rpcUrl,
               privateKey: pk,
@@ -744,7 +757,7 @@ async function runPipelineInner(logger: Logger, id: string, keys: BridgeDedupeKe
               underlyingToken: underlying,
               recipient: job.intent.recipient as `0x${string}`,
               amount: amountUnits,
-              burnCommitment: `0x${bc}` as `0x${string}`,
+              burnCommitment: `0x${poolBurnNonce}` as `0x${string}`,
             }));
             const j = getJob(id);
             patchJob(id, {
