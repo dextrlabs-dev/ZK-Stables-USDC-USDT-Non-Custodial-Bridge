@@ -59,3 +59,32 @@ evm/broadcast/
 tmp/
 temp/
 *.local
+
+# Editor automation, agent metadata, skills bundles, and local transcripts
+.cursor/
+**/.cursor/
+.agents/
+**/.agents/
+.claude/
+**/.claude/
+.codex/
+**/.codex/
+.windsurf/
+**/.windsurf/
+.continue/
+**/.continue/
+.aider*
+!.aider.conf.yml.example
+.cursorrules
+.cursorignore
+**/.cursor/skills/
+**/.agents/skills/
+**/.cursor/skills-cursor/
+**/.cursor/plans/
+.agent/
+**/.agent/
+**/agent-transcripts/
+**/.cursor/projects/
+
+# Vite / tooling caches (local)
+**/.vite/
