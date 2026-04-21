@@ -1,5 +1,7 @@
 # ZK-Stables-USDC-USDT-Non-Custodial-Bridge
 
+[![CI](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/actions/workflows/ci.yml)
+
 **Prototype** — non-custodial bridge research across Midnight (Compact), EVM, and Cardano. See [docs/PROTOTYPE.md](docs/PROTOTYPE.md) for status and limitations, [docs/USAGE.md](docs/USAGE.md) for how to run each package, [docs/RELEASES.md](docs/RELEASES.md) for tags and test artifacts, and [CHANGELOG.md](CHANGELOG.md) for version notes.
 
 ## Midnight Compact contracts

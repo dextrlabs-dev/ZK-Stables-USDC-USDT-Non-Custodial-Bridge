@@ -4,9 +4,13 @@ All notable changes to this prototype are documented here. Versions match git ta
 
 ## Unreleased
 
+### Added
+
+- Minimal GitHub Actions **CI** (checkout, Node.js, Aiken install) and README badge ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+
 ### Removed
 
-- GitHub Actions **CI** workflow; run the same checks locally ([docs/USAGE.md](docs/USAGE.md)).
+- Full CI pipeline (workspace typechecks, EVM tests, Cardano checks) in favor of local runs; see [docs/USAGE.md](docs/USAGE.md).
 
 ## [v0.1.0-alpha.1] - 2026-04-02
 

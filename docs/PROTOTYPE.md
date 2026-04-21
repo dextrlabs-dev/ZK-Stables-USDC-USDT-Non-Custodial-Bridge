@@ -18,4 +18,4 @@ This repository is a **non-custodial bridge prototype** between stablecoin rails
 
 ## Automated checks
 
-There is no GitHub Actions workflow in this repository. Run the same checks locally (typecheck, EVM tests, Aiken, Cardano TS) as documented in [USAGE.md](USAGE.md) under **Local verification**.
+GitHub Actions runs a **minimal** workflow on pushes and pull requests to `main` / `master`: checkout, Node.js setup, and [Aiken](https://github.com/aiken-lang/aiken) install (see [.github/workflows/ci.yml](../.github/workflows/ci.yml)). The README badge reflects the latest run. For full verification (typecheck, EVM tests, `aiken check` on validators, Cardano TS), run locally as documented in [USAGE.md](USAGE.md) under **Local verification**.
