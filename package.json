@@ -7,7 +7,6 @@
     "local-cli",
     "bridge-cli",
     "zk-stables-relayer",
-    "zk-stables-ui",
     "bridge-operator-console"
   ],
   "scripts": {

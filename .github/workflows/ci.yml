@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.19.0"
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -47,8 +47,8 @@ jobs:
       - name: Typecheck relayer
         run: npm run typecheck -w @zk-stables/relayer
 
-      - name: Typecheck UI
-        run: npm run typecheck -w @zk-stables/ui
+      - name: Typecheck bridge operator console
+        run: npm run typecheck -w bridge-operator-console
 
       - name: npm ci + test (EVM)
         working-directory: evm

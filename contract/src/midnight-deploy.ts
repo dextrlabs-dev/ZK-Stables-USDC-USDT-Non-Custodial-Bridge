@@ -25,14 +25,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const zkStablesZkConfigPath = path.resolve(__dirname, 'managed', 'zk-stables');
 export const zkStablesRegistryZkConfigPath = path.resolve(__dirname, 'managed', 'zk-stables-registry');
 
-export const zkStablesCompiledContract = CompiledContract.make('zk-stables', ZkStables.Contract).pipe(
+// Generated `Contract` classes lag slightly behind strict `CompiledContract` generics in compact-js 2.5.
+const ctor = <C>(c: C) => c as unknown as Parameters<typeof CompiledContract.make>[1];
+
+export const zkStablesCompiledContract = CompiledContract.make('zk-stables', ctor(ZkStables.Contract)).pipe(
   CompiledContract.withVacantWitnesses,
   CompiledContract.withCompiledFileAssets(zkStablesZkConfigPath),
 );
 
 export const zkStablesRegistryCompiledContract = CompiledContract.make(
   'zk-stables-registry',
-  ZkStablesRegistry.Contract,
+  ctor(ZkStablesRegistry.Contract),
 ).pipe(CompiledContract.withVacantWitnesses, CompiledContract.withCompiledFileAssets(zkStablesRegistryZkConfigPath));
 
 export const zkStablesPrivateStateId = 'zkStablesPrivateState' as const;

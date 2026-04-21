@@ -1,5 +1,8 @@
 import { WitnessContext } from '@midnight-ntwrk/compact-runtime';
-import { Ledger, Maybe } from './managed/zk-stables/contract/index.js';
+import { ledger } from './managed/zk-stables/contract/index.js';
+
+type Ledger = ReturnType<typeof ledger>;
+type Maybe<T extends Uint8Array = Uint8Array> = { is_some: boolean; value: T };
 
 export type ZkStablesPrivateState = {
   operatorSecretKey?: Uint8Array;
