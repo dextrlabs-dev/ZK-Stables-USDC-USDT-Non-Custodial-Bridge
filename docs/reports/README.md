@@ -2,18 +2,14 @@
 
 **Human-readable summary:** [../TEST_REPORT.md](../TEST_REPORT.md) (bridge process, per-chain tx hashes, relayer jobs, CI overview). This page focuses on **machine-readable** artifacts and local regeneration commands.
 
-## Continuous integration
+## Expected artifacts (local)
 
-On each push or pull request, [.github/workflows/ci.yml](../../.github/workflows/ci.yml) uploads an artifact named **test-reports** containing:
+This repository does not upload CI artifacts from GitHub Actions. Generate the same files locally:
 
 | File | Contents |
 |------|----------|
 | `junit-evm.xml` | Hardhat / Mocha JUnit output (2 test cases in the current suite) |
 | `aiken-check.log` | Full stdout from `aiken check` (compilation + embedded unit tests) |
-
-**How to download:** GitHub → **Actions** → choose a workflow run → scroll to **Artifacts** → download `test-reports.zip`.
-
-Public repositories expose these artifacts to anyone with the run URL; no login is required to download from successful runs on public repos.
 
 ## Local generation
 

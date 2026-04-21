@@ -14,8 +14,8 @@ This repository is a **non-custodial bridge prototype** between stablecoin rails
 
 - No warranty of economic safety, liveness, or correctness under adversarial conditions.
 - Toolchain versions (Compact CLI, Midnight node/indexer/proof-server, wallet SDKs) must stay aligned; mismatches produce subtle runtime failures.
-- **Compact compilation** (`npm run compact` in `contract/`) requires the [Compact CLI](https://github.com/midnightntwrk/compact) on the developer machine and is not executed in the default GitHub Actions job (CI runs TypeScript typecheck against committed managed sources, EVM tests, and Aiken check).
+- **Compact compilation** (`npm run compact` in `contract/`) requires the [Compact CLI](https://github.com/midnightntwrk/compact) on the developer machine.
 
-## CI
+## Automated checks
 
-Continuous integration runs on pushes and pull requests to `main` / `master` (see [.github/workflows/ci.yml](../.github/workflows/ci.yml)). The README badge reflects the latest workflow result on the default branch.
+There is no GitHub Actions workflow in this repository. Run the same checks locally (typecheck, EVM tests, Aiken, Cardano TS) as documented in [USAGE.md](USAGE.md) under **Local verification**.

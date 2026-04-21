@@ -1,6 +1,6 @@
 # Consolidated test report
 
-**Scope:** This document summarizes automated checks (CI and unit-level tests), how the bridge and relayer fit together, and **documented** integration runs with transaction hashes on EVM, Cardano, and Midnight. It is a **prototype** narrative, not a security audit or mainnet sign-off.
+**Scope:** This document summarizes automated checks (local verification and unit-level tests), how the bridge and relayer fit together, and **documented** integration runs with transaction hashes on EVM, Cardano, and Midnight. It is a **prototype** narrative, not a security audit or mainnet sign-off.
 
 **Last updated:** 2026-04-02 (integration figures from the run dated **2026-04-01** in [BRIDGE_TX_HASH_REPORT.md](BRIDGE_TX_HASH_REPORT.md)).
 
@@ -13,12 +13,12 @@
 | Section | What you get |
 |---------|----------------|
 | [Bridge process](#bridge-process-how-a-lock-becomes-a-job) | End-to-end flow and diagram |
-| [Automated verification (CI)](#automated-verification-ci) | What GitHub Actions runs and which artifacts exist |
+| [Automated verification (local)](#automated-verification-local) | Commands to run locally and where logs land |
 | [Automated tests (detail)](#automated-tests-detail) | Hardhat, Aiken, and TypeScript checks |
 | [Integration: latest documented three-chain run](#integration-latest-documented-three-chain-run) | **Tx hashes**, addresses, relayer jobs |
 | [Earlier documented run](#earlier-documented-run-evm--midnight-only) | Pointer to EVM + Midnight only |
 | [Known gaps and failures](#known-gaps-and-failures) | Honest limits from local runs |
-| [Reproduce and refresh](#reproduce-and-refresh) | Links to commands and CI downloads |
+| [Reproduce and refresh](#reproduce-and-refresh) | Links to commands and report paths |
 
 **Canonical hash tables and reproduce commands** for every field below also live in [BRIDGE_TX_HASH_REPORT.md](BRIDGE_TX_HASH_REPORT.md). Integration methodology and relayer settings are in [LOCAL_BRIDGE_INTEGRATION_REPORT.md](LOCAL_BRIDGE_INTEGRATION_REPORT.md). Cardano stack setup: [CARDANO_LOCAL_YACI.md](CARDANO_LOCAL_YACI.md). Production variable checklist: [SRS_RELAYER_REQUIREMENTS.md](SRS_RELAYER_REQUIREMENTS.md).
 
@@ -61,23 +61,23 @@ flowchart LR
 
 ---
 
-## Automated verification (CI)
+## Automated verification (local)
 
-Workflow: [.github/workflows/ci.yml](../.github/workflows/ci.yml) on push and pull request to `main` / `master`.
+There is no GitHub Actions workflow; run the following locally (see [USAGE.md](USAGE.md)):
 
 | Step | Package / path | What it validates |
 |------|----------------|-------------------|
 | `npm ci` | Repository root | Workspace install with patches |
 | Typecheck | `contract` (`@zk-stables/midnight-contract`) | TypeScript against committed Compact-managed exports |
 | Typecheck | `zk-stables-relayer` | Relayer compiles |
-| Typecheck | `zk-stables-ui` | UI compiles |
+| Typecheck | `bridge-operator-console` | Operator console compiles |
 | `npm test` with `CI=true` | `evm` | Hardhat tests; writes JUnit (see below) |
 | `aiken check` | `cardano/aiken` | Validator build + embedded unit tests; log captured |
 | `npm run typecheck` | `cardano/ts` | Mesh / off-chain CLI TypeScript |
 
-**Machine-readable outputs (not committed to git):** each run uploads a **`test-reports`** artifact containing `junit-evm.xml` and `aiken-check.log`. Download: GitHub → **Actions** → select run → **Artifacts**. Same layout is documented in [reports/README.md](reports/README.md).
+**Machine-readable outputs (not committed to git):** `junit-evm.xml` and `aiken-check.log` paths are documented in [reports/README.md](reports/README.md).
 
-**Snapshot counts** (current suite; confirm on your commit via CI or local commands in [reports/README.md](reports/README.md)):
+**Snapshot counts** (current suite; confirm via local commands in [reports/README.md](reports/README.md)):
 
 - **EVM:** 2 passing Hardhat tests  
 - **Aiken:** 1 passing unit test (`lock_datum_constructible`)
@@ -170,7 +170,7 @@ Deploy artifact for that run: `/tmp/fulltest-addrs.json`.
 | Midnight dust | Local `deployContract` failed with insufficient dust until wallet funded (`fund-and-register-dust` flow) | [LOCAL_BRIDGE_INTEGRATION_REPORT.md](LOCAL_BRIDGE_INTEGRATION_REPORT.md) |
 | Anvil confirmations | Default `RELAYER_EVM_CONFIRMATIONS=1` can skip the lock block on a quiet chain; use `0` locally or mine ahead | [LOCAL_BRIDGE_INTEGRATION_REPORT.md](LOCAL_BRIDGE_INTEGRATION_REPORT.md) |
 | Cardano bridge wallet | Must fund Mesh-derived address (e.g. 50 ADA from Yaci `utxo1`) or `Cardano payout tx` cannot be built | [BRIDGE_TX_HASH_REPORT.md](BRIDGE_TX_HASH_REPORT.md) |
-| CI vs integration | CI does not run Compact compile, local stacks, or relayer e2e | This document, [.github/workflows/ci.yml](../.github/workflows/ci.yml) |
+| Local checks vs integration | Automated checks do not run Compact compile, local stacks, or relayer e2e | This document, [USAGE.md](USAGE.md) |
 
 ---
 
@@ -182,8 +182,8 @@ Deploy artifact for that run: `/tmp/fulltest-addrs.json`.
 | EVM + Midnight only (**8811**) | Same file, **Earlier run** subsection |
 | Relayer env and commands | [LOCAL_BRIDGE_INTEGRATION_REPORT.md](LOCAL_BRIDGE_INTEGRATION_REPORT.md), [zk-stables-relayer/.env.integration.example](../zk-stables-relayer/.env.integration.example) |
 | Yaci + Cardano relayer wiring | [CARDANO_LOCAL_YACI.md](CARDANO_LOCAL_YACI.md) |
-| Latest JUnit + Aiken log for a commit | GitHub **Actions** artifact `test-reports` — [reports/README.md](reports/README.md) |
-| Local parity with CI | [USAGE.md](USAGE.md) — **CI parity (local)** |
+| Latest JUnit + Aiken log | Generate locally — [reports/README.md](reports/README.md) |
+| Local verification commands | [USAGE.md](USAGE.md) — **Local verification** |
 
 To stop a dev relayer bound to a port: `fuser -k <port>/tcp` (e.g. `8822`).
 

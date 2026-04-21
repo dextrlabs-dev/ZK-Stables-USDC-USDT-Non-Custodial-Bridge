@@ -149,15 +149,15 @@ From the repo root `package.json`:
 - `npm run contract:compact` / `npm run contract:build` — contract workspace
 - `npm run run-genesis` / `npm run run-registry-all` — local-cli scripts (after env + network are ready)
 
-## CI parity (local)
+## Local verification
 
-To approximate what GitHub Actions runs:
+Run typecheck, EVM tests, Aiken, and Cardano TS locally:
 
 ```bash
 npm ci
 npm run typecheck -w @zk-stables/midnight-contract
 npm run typecheck -w @zk-stables/relayer
-npm run typecheck -w @zk-stables/ui
+npm run typecheck -w bridge-operator-console
 (cd evm && npm ci && CI=true npm test)
 (cd cardano/aiken && aiken check)
 (cd cardano/ts && npm ci && npm run typecheck)

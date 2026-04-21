@@ -2,6 +2,12 @@
 
 All notable changes to this prototype are documented here. Versions match git tags when present.
 
+## Unreleased
+
+### Removed
+
+- GitHub Actions **CI** workflow; run the same checks locally ([docs/USAGE.md](docs/USAGE.md)).
+
 ## [v0.1.0-alpha.1] - 2026-04-02
 
 ### Added
