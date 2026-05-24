@@ -7,7 +7,8 @@
     "local-cli",
     "bridge-cli",
     "zk-stables-relayer",
-    "bridge-operator-console"
+    "bridge-operator-console",
+    "benchmarks"
   ],
   "scripts": {
     "fund:cardano-yaci": "node scripts/fund-cardano-demo-from-yaci.mjs",
@@ -28,7 +29,11 @@
     "bridge-cli:build": "npm run build -w @zk-stables/bridge-cli",
     "ops:zk-bridge-matrix": "node scripts/ops-zk-bridge-production-matrix.mjs",
     "bridge-console:dev": "npm run dev -w bridge-operator-console",
-    "bridge-console:build": "npm run build -w bridge-operator-console"
+    "bridge-console:build": "npm run build -w bridge-operator-console",
+    "bench": "npx tsx benchmarks/src/cli.ts",
+    "bench:latency": "npx tsx benchmarks/src/cli.ts --scenario single-lock,single-burn",
+    "bench:throughput": "npx tsx benchmarks/src/cli.ts --scenario concurrent-locks",
+    "bench:full": "npx tsx benchmarks/src/cli.ts --scenario all"
   },
   "devDependencies": {
     "patch-package": "^8.0.0"

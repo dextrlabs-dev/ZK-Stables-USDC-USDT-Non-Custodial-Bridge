@@ -10,17 +10,37 @@ export type LockIntent = {
   assetKind: number;
   amount: string;
   recipient: string;
-  /** Required when sourceChain is `evm`: anchor from on-chain `ZkStablesPoolLock.lock`. */
   source?: {
     evm?: {
       txHash: `0x${string}`;
       logIndex: number;
-      blockNumber: string;
+      blockNumber?: string;
       poolLockAddress?: `0x${string}`;
       token?: `0x${string}`;
       nonce?: `0x${string}`;
     };
+    cardano?: {
+      txHash: string;
+      outputIndex: number;
+      blockHeight?: string;
+      scriptHash?: string;
+      policyIdHex?: string;
+      assetNameHex?: string;
+      lockNonce?: string;
+    };
   };
+  connected?: {
+    evm?: string;
+    cardano?: string;
+    midnight?: string;
+    midnightUnshielded?: string;
+    relayerBridge?: {
+      evmRecipient?: string;
+      cardanoRecipient?: string;
+      midnightRecipient?: string;
+    };
+  };
+  note?: string;
 };
 
 export type BurnIntent = {
@@ -31,9 +51,40 @@ export type BurnIntent = {
   assetKind: number;
   amount: string;
   recipient: string;
-  /** 32-byte hex (64 chars) for Midnight `depositCommitment` binding. */
   burnCommitmentHex: string;
+  source?: {
+    evm?: {
+      txHash: `0x${string}`;
+      logIndex: number;
+      blockNumber?: string;
+      wrappedTokenAddress?: `0x${string}`;
+      nonce?: `0x${string}`;
+      fromAddress?: `0x${string}`;
+    };
+    cardano?: {
+      txHash: string;
+      outputIndex: number;
+      blockHeight?: string;
+      scriptHash?: string;
+      policyIdHex?: string;
+      assetNameHex?: string;
+      lockNonce?: string;
+      spendTxHash?: string;
+    };
+    midnight?: {
+      txId?: string;
+      txHash?: string;
+      contractAddress?: string;
+      destChainId?: number;
+      lockNonce?: string;
+      depositCommitmentHex?: string;
+    };
+  };
+  connected?: LockIntent['connected'];
+  note?: string;
 };
+
+export type BridgeIntent = LockIntent | BurnIntent;
 
 export type RelayerPhase =
   | 'received'

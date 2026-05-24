@@ -1,13 +1,46 @@
 {
-  "name": "@zk-stables/sdk",
+  "name": "zk-stables-sdk",
   "version": "0.1.0",
-  "private": true,
+  "description": "TypeScript SDK for the ZK-Stables cross-chain stablecoin bridge relayer API",
+  "license": "MIT",
+  "author": "DextrLabs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge.git",
+    "directory": "sdk"
+  },
+  "keywords": [
+    "zk-stables",
+    "bridge",
+    "usdc",
+    "usdt",
+    "cross-chain",
+    "midnight",
+    "cardano",
+    "evm"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "eventemitter3": "^5.0.1"
@@ -17,4 +50,3 @@
     "typescript": "^5.9.3"
   }
 }
-

@@ -1,0 +1,22 @@
+{
+  "name": "@zk-stables/benchmarks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "bench": "tsx src/cli.ts",
+    "bench:latency": "tsx src/cli.ts --scenario single-lock,single-burn",
+    "bench:throughput": "tsx src/cli.ts --scenario concurrent-locks",
+    "bench:full": "tsx src/cli.ts --scenario all"
+  },
+  "dependencies": {
+    "viem": "^2.47.6",
+    "pino": "^10.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
