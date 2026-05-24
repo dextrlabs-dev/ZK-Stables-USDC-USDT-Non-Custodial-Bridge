@@ -1,0 +1,84 @@
+name: SDK Release
+
+# Builds the zk-stables-sdk package and creates a GitHub Release with the
+# built tarball + dist artefacts attached. No npm publish.
+#
+# Triggers:
+#   - tag `sdk-v*`  -> SDK-only release
+#   - tag `v*`      -> full repo release (also attaches the SDK tarball)
+#   - manual dispatch
+
+on:
+  push:
+    tags:
+      - "sdk-v*"
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: npm ci
+
+      - name: Type-check SDK
+        working-directory: sdk
+        run: npm run typecheck
+
+      - name: Build SDK
+        working-directory: sdk
+        run: npm run build
+
+      - name: Pack SDK into a publishable tarball
+        working-directory: sdk
+        run: |
+          TARBALL=$(npm pack 2>/dev/null | tail -1)
+          mv "$TARBALL" "../zk-stables-sdk-${GITHUB_REF_NAME}.tgz"
+          ls -la ../zk-stables-sdk-${GITHUB_REF_NAME}.tgz
+
+      - name: Read tag-matching changelog section
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          VERSION="${VERSION#sdk-v}"
+          if [ -f CHANGELOG.md ]; then
+            awk -v v="$VERSION" '
+              $0 ~ "^## (\\[)?" v "(\\])?" {capture=1; print; next}
+              capture && /^## / {exit}
+              capture {print}
+            ' CHANGELOG.md > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            cat > release-notes.md <<EOF
+          ${TAG} release of the ZK-Stables bridge.
+
+          Attached: \`zk-stables-sdk-${TAG}.tgz\` (built SDK package; \`npm install ./zk-stables-sdk-${TAG}.tgz\` to use without publishing to npm).
+
+          See [docs/POCS.md](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/blob/main/docs/POCS.md), [docs/UPTIME.md](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/blob/main/docs/UPTIME.md), and [FINAL_REPORT.md](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/blob/main/FINAL_REPORT.md) for the milestone evidence package.
+          EOF
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            zk-stables-sdk-${{ github.ref_name }}.tgz
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true

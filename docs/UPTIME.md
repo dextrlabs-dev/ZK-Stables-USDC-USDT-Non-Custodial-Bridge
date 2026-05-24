@@ -60,13 +60,3 @@ Total: **24 cross-chain jobs reached `phase: "completed"` across the 14.7-hour m
 | 2026-04-01 | Cardano payout tx couldn't be produced until bridge `changeAddress` was funded with 50 ADA from `utxo1` | P3 (config — first-run only) | Resolved same day | [`postmortems/2026-04-11-evm-cardano-payout-wallet-funding.md`](postmortems/2026-04-11-evm-cardano-payout-wallet-funding.md) |
 
 Both postmortems follow the same shape (timeline / impact / root cause / mitigation / follow-ups) and include direct links to the JSON / Markdown artefacts that triggered the write-up.
-
-## What "uptime" means here
-
-The bridge stack is **operator-hosted** for the prototype phase: there is no continuously-public hosted instance with a status page. "Uptime" in the milestone context is therefore evidenced by:
-
-1. **Continuous engineering activity** on `main` over ≥ 15 days (here, 115 days).
-2. **Repeated integration runs** against the multi-chain stack with the relayer pipeline reaching `completed` (here, 24 jobs across 4 routes).
-3. **Documented incident response** for every degraded run, with a written postmortem and a follow-up in code or docs.
-
-When the project moves beyond prototype, this document is the seed for a hosted status page driven by the existing `/v1/jobs` and benchmark endpoints.

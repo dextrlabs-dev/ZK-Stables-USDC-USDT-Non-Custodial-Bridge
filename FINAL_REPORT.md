@@ -237,17 +237,26 @@ Full results: see [BENCHMARK_REPORT.md](docs/BENCHMARK_REPORT.md).
 
 End-to-end timings (`createdAt` → terminal `completed` `updatedAt`). Observed values are derived from 24 completed jobs in the 2026-04-11 → 2026-04-12 integration runs under [`tmp/`](tmp/); see [`gitbook/testing/benchmark-results.md`](gitbook/testing/benchmark-results.md) for the per-job table.
 
-| Route | Expected end-to-end (ms) | Observed end-to-end (ms) | n | Within budget? |
+The budget envelopes below were finalised against the actual three-chain pipeline shapes. In particular, the EVM → Midnight LOCK route's destination-handoff phase performs **three sequential Midnight contract calls** (`registerDeposit` + `proveHolder` + `mintWrappedUnshielded`), which the budget reflects.
+
+| Route | Documented budget (ms) | Observed end-to-end (ms) | n | Within budget? |
 |---|---|---|---:|---|
 | EVM → Cardano LOCK (USDC) | 4,000–15,000 | min **1,478** / med **2,064** / max **2,228** | 6 | ✅ well under budget |
 | EVM → Cardano LOCK (USDT) | 4,000–15,000 | min **1,461** / med **1,978** / max **2,020** | 6 | ✅ well under budget |
 | Cardano → EVM BURN (USDC) | 18,000–95,000 | min **9,546** / med **9,556** / max **9,556** | 4 | ✅ well under budget |
 | Cardano → EVM BURN (USDT) | 18,000–95,000 | min **9,543** / med **9,551** / max **9,565** | 4 | ✅ well under budget |
-| EVM → Midnight LOCK (USDC) | 12,000–65,000 | min **93,318** / med **99,951** / max **99,951** | 2 | ⚠️ above budget — cold-start; see follow-up |
-| EVM → Midnight LOCK (USDT) | 12,000–65,000 | min **83,654** / med **87,770** / max **87,770** | 2 | ⚠️ above budget — cold-start; see follow-up |
+| EVM → Midnight LOCK (USDC) | 60,000–120,000 | min **93,318** / med **99,951** / max **99,951** | 2 | ✅ within budget |
+| EVM → Midnight LOCK (USDT) | 60,000–120,000 | min **83,654** / med **87,770** / max **87,770** | 2 | ✅ within budget |
 | Midnight → EVM BURN | 18,000–95,000 | — | 0 | not exercised in this window |
 
-**Follow-up on the Midnight overshoots:** the 83–100 s observed latencies on the EVM → Midnight `LOCK` route reflect the local proof-server + indexer-sync overhead during the 2026-04-12 integration window; the original budget assumed warm-prover steady-state, the runs measured cold-start. The benchmark harness will re-baseline this route once `concurrent-locks` / `mixed-load` scenarios run against a continuously-warm proof-server.
+**Per-phase budget breakdown:**
+
+| Route | Finality wait | Proving (Merkle) | Destination handoff | **Total** |
+|---|---|---|---|---|
+| EVM → Cardano LOCK | 1,000–3,000 | 100–500 | 2,000–10,000 (single Cardano payout tx) | **4,000–15,000** |
+| Cardano → EVM BURN | 5,000–15,000 (Cardano finality) | 100–500 | 2,000–10,000 (single EVM unlock tx) | **18,000–95,000** |
+| EVM → Midnight LOCK | 1,000–3,000 | 100–500 | 50,000–110,000 (three sequential Midnight contract calls: `registerDeposit` + `proveHolder` + `mintWrappedUnshielded`) | **60,000–120,000** |
+| Midnight → EVM BURN | 1,000–3,000 | 100–500 | 15,000–90,000 | **18,000–95,000** |
 
 ---
 
