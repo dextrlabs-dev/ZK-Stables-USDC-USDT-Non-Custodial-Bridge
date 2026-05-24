@@ -88,3 +88,6 @@ temp/
 
 # Vite / tooling caches (local)
 **/.vite/
+
+# MkDocs build output (CI rebuilds on push to main)
+/site/
