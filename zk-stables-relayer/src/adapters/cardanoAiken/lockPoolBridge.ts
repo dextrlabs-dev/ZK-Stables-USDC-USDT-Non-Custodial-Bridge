@@ -140,10 +140,13 @@ export async function lockMintThenBridgeRelease(params: {
   const datumData = buildLockDatum(datum);
 
   const utxos1: UTxO[] = await wallet.getUtxos();
+  // Native-script mint + lock at the script has no Plutus redeemers, so no ex-unit evaluation
+  // is required. But Mesh's .complete() calls evaluateTx unconditionally when an evaluator is
+  // set, and Yaci's utils/txs/evaluate returns HTTP 500 on a redeemer-less tx. Omit the
+  // evaluator here so evaluation is skipped; the Plutus BridgeRelease tx below keeps it.
   const txB1 = new MeshTxBuilder({
     fetcher,
     submitter: fetcher,
-    evaluator: fetcher as unknown as IEvaluator,
   });
 
   const lockAssets: Asset[] = [
@@ -305,10 +308,13 @@ export async function lockMintHoldAtScriptOnly(params: {
   const datumData = buildLockDatum(datum);
 
   const utxos1: UTxO[] = await wallet.getUtxos();
+  // Native-script mint + lock at the script has no Plutus redeemers, so no ex-unit evaluation
+  // is required. But Mesh's .complete() calls evaluateTx unconditionally when an evaluator is
+  // set, and Yaci's utils/txs/evaluate returns HTTP 500 on a redeemer-less tx. Omit the
+  // evaluator here so evaluation is skipped; the Plutus BridgeRelease tx below keeps it.
   const txB1 = new MeshTxBuilder({
     fetcher,
     submitter: fetcher,
-    evaluator: fetcher as unknown as IEvaluator,
   });
 
   const lockAssets: Asset[] = [
