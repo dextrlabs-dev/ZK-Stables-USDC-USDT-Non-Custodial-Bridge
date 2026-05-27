@@ -91,7 +91,7 @@ Operational issues found during integration testing were triaged and written up 
 
 - **Demo recording** (bridge in action): [demo/demo.mp4](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/blob/main/demo/demo.mp4).
 - **Developer onboarding workshop recording**: [docs/workshop.mp4](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/blob/main/docs/workshop.mp4).
-- **Project Completion Video (PCV):** _[PCV link to be inserted]_.
+- **Project Completion Video (PCV):** [youtu.be/Z6moHzvGV7Y](https://youtu.be/Z6moHzvGV7Y).
 
 ---
 
@@ -194,4 +194,4 @@ The library is free and MIT-licensed. Ongoing maintenance and a path toward prod
 
 ## Project Completion Video (PCV)
 
-Public video walkthrough of the completed system (live demo + project story): _[PCV link to be inserted]_.
+Public video walkthrough of the completed system (live demo + project story): [youtu.be/Z6moHzvGV7Y](https://youtu.be/Z6moHzvGV7Y).
