@@ -15,9 +15,12 @@
 | Benchmark Results | [gitbook/testing/benchmark-results.md](gitbook/testing/benchmark-results.md) |
 | Proof-of-Concept Runs | [docs/POCS.md](docs/POCS.md) |
 | Uptime & Incident Postmortems | [docs/UPTIME.md](docs/UPTIME.md) |
-| SDK Package | [zk-stables-sdk on npm](https://www.npmjs.com/package/zk-stables-sdk) |
+| SDK Package (`zk-stables-sdk` tarball) | [v1.0.0-rc1 release](https://github.com/dextrlabs-dev/ZK-Stables-USDC-USDT-Non-Custodial-Bridge/releases/tag/v1.0.0-rc1) |
 | SDK Integration Playbook | [gitbook/guides/sdk-integration.md](gitbook/guides/sdk-integration.md) |
 | Demo Video | [demo/demo.mp4](demo/demo.mp4) |
+| Developer Onboarding Workshop (recording) | [docs/workshop.mp4](docs/workshop.mp4) |
+| Project Completion Report (PCR) | [PCR.pdf](PCR.pdf) |
+| Project Completion Video (PCV) | [youtu.be/Z6moHzvGV7Y](https://youtu.be/Z6moHzvGV7Y) |
 
 ## Overview
 
